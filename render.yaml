@@ -1,0 +1,46 @@
+services:
+  - type: web
+    name: telegram-userbot
+    runtime: docker
+    plan: starter
+    region: oregon
+    branch: main
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    
+    # Environment variables (set these in Render dashboard)
+    envVars:
+      - key: API_ID
+        sync: false
+      - key: API_HASH
+        sync: false
+      - key: BOT_TOKEN
+        sync: false
+      - key: SESSION_STRING
+        sync: false
+      - key: PORT
+        value: 5000
+      - key: PYTHONUNBUFFERED
+        value: "1"
+    
+    # Health check configuration
+    healthCheckPath: /health
+    
+    # Persistent disk for task storage
+    disk:
+      name: userbot-data
+      mountPath: /app/data
+      sizeGB: 1
+    
+    # Auto-deploy on push
+    autoDeploy: true
+    
+    # Build settings
+    buildFilter:
+      paths:
+        - "**"
+      ignoredPaths:
+        - "*.md"
+        - ".git/**"
+        - ".gitignore"
+        - "*.log"

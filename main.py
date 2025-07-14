@@ -11,7 +11,10 @@ from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import RPCError
 
-# Remove web server imports
+# FastAPI for web server (Added from first script)
+from fastapi import FastAPI, HTTPException
+import uvicorn
+import threading
 
 # Configure logging
 logging.basicConfig(
@@ -29,6 +32,7 @@ API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH", "")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 SESSION_STRING = os.getenv("SESSION_STRING", "")
+PORT = int(os.getenv("PORT", "5000"))  # Added from first script
 
 # Global variables
 userbot_client: Optional[TelegramClient] = None
@@ -36,7 +40,8 @@ control_bot: Optional[Client] = None
 tasks: List[Dict] = []
 forwarding_active = {}
 
-# Remove web server code - focus on bots only
+# Web server app (Added from first script)
+app = FastAPI(title="Telegram UserBot System", version="1.0.0")
 
 class TaskManager:
     """Manages forwarding tasks and storage"""
@@ -625,9 +630,76 @@ Need help? Check the README.md file for detailed instructions.
         logger.error(f"Failed to start Control Bot: {e}")
         return False
 
+# Web endpoints (Added from first script)
+@app.get("/")
+async def root():
+    """Root endpoint"""
+    return {
+        "status": "running",
+        "service": "Telegram UserBot System", 
+        "version": "1.0.0",
+        "endpoints": {
+            "health": "/health",
+            "status": "/status"
+        }
+    }
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    userbot_status = userbot_client and userbot_client.is_connected()
+    control_bot_status = control_bot and control_bot.is_connected
+    
+    return {
+        "status": "healthy" if (userbot_status or control_bot_status) else "unhealthy",
+        "userbot": "connected" if userbot_status else "disconnected",
+        "control_bot": "connected" if control_bot_status else "disconnected",
+        "tasks": {
+            "total": len(tasks),
+            "active": len([task for task in tasks if task.get("on", False)])
+        },
+        "timestamp": datetime.now().isoformat()
+    }
+
+@app.get("/status")
+async def status():
+    """Detailed status endpoint"""
+    return {
+        "system": {
+            "userbot_connected": userbot_client and userbot_client.is_connected(),
+            "control_bot_connected": control_bot and control_bot.is_connected,
+            "tasks_loaded": len(tasks)
+        },
+        "tasks": [
+            {
+                "id": task["id"],
+                "source": task["source"],
+                "target": task["target"],
+                "active": task.get("on", False),
+                "created": task.get("created_at")
+            }
+            for task in tasks
+        ],
+        "environment": {
+            "api_id_set": bool(API_ID),
+            "api_hash_set": bool(API_HASH),
+            "bot_token_set": bool(BOT_TOKEN),
+            "session_string_set": bool(SESSION_STRING)
+        }
+    }
+
+def run_web_server():  # Added from first script
+    """Run the web server in a separate thread"""
+    uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="info")
+
 async def main():
     """Main application entry point"""
     logger.info("Starting Telegram UserBot system...")
+    
+    # Start web server in background thread (Added from first script)
+    web_thread = threading.Thread(target=run_web_server, daemon=True)
+    web_thread.start()
+    logger.info(f"Web server started on port {PORT}")
     
     # Validate configuration
     if not API_ID or not API_HASH:

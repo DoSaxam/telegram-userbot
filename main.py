@@ -11,10 +11,7 @@ from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import RPCError
 
-# FastAPI for web server
-from fastapi import FastAPI, HTTPException
-import uvicorn
-import threading
+# Remove web server imports
 
 # Configure logging
 logging.basicConfig(
@@ -32,7 +29,6 @@ API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH", "")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 SESSION_STRING = os.getenv("SESSION_STRING", "")
-PORT = int(os.getenv("PORT", "5000"))
 
 # Global variables
 userbot_client: Optional[TelegramClient] = None
@@ -40,8 +36,7 @@ control_bot: Optional[Client] = None
 tasks: List[Dict] = []
 forwarding_active = {}
 
-# Web server app
-app = FastAPI(title="Telegram UserBot System", version="1.0.0")
+# Remove web server code - focus on bots only
 
 class TaskManager:
     """Manages forwarding tasks and storage"""
@@ -333,13 +328,12 @@ Let's get started! Use `/add` to create your first forwarding task.
                     f"🆔 Task ID: `{task_id}`\n"
                     f"📥 Source: `{source}`\n"
                     f"📤 Target: `{target}`\n"
-                    f"🟢 Status: Active\n\n"
-                    f"Your UserBot will now forward messages from {source} to {target}!"
+                    f"⚡ Status: **ON**\n\n"
+                    f"Your task is now active and will forward messages in real-time!"
                 )
                 
             except Exception as e:
-                logger.error(f"Error in add_task_command: {e}")
-                await message.reply_text("❌ Error adding task. Please try again.")
+                await message.reply_text(f"❌ Error adding task: {str(e)}")
         
         @control_bot.on_message(filters.command("delete"))
         async def delete_task_command(client, message: Message):
@@ -348,227 +342,282 @@ Let's get started! Use `/add` to create your first forwarding task.
                 args = message.text.split()
                 
                 if len(args) < 2:
-                    await message.reply_text(
-                        "🗑️ **Delete Task**\n\n"
-                        "Usage: `/delete <task_id>`\n\n"
-                        "Example: `/delete 0`\n\n"
-                        "Use `/tasks` to see all task IDs."
-                    )
+                    if not tasks:
+                        await message.reply_text("📭 No tasks found. Use `/add` to create a task first.")
+                        return
+                    
+                    # Show all tasks
+                    task_list = "🗂️ **Select a task to delete:**\n\n"
+                    for i, task in enumerate(tasks):
+                        status = "✅ ON" if task.get("on", False) else "❌ OFF"
+                        task_list += f"`{i}` | {task['source']} ➡️ {task['target']} | {status}\n"
+                    
+                    task_list += "\n💬 Usage: `/delete <task_id>`\nExample: `/delete 0`"
+                    
+                    await message.reply_text(task_list)
                     return
                 
-                task_id = int(args[1])
-                
-                if task_manager.delete_task(task_id):
-                    await message.reply_text(f"✅ Task {task_id} deleted successfully!")
-                else:
-                    await message.reply_text(f"❌ Task {task_id} not found.")
+                try:
+                    task_id = int(args[1])
                     
-            except ValueError:
-                await message.reply_text("❌ Invalid task ID. Please provide a number.")
+                    if task_manager.delete_task(task_id):
+                        await message.reply_text(f"🗑️ **Task {task_id} deleted successfully!**")
+                    else:
+                        await message.reply_text("❌ Invalid task number.")
+                        
+                except ValueError:
+                    await message.reply_text("❌ Please enter a valid number.")
+                    
             except Exception as e:
-                logger.error(f"Error in delete_task_command: {e}")
-                await message.reply_text("❌ Error deleting task. Please try again.")
+                await message.reply_text(f"❌ Error deleting task: {str(e)}")
         
         @control_bot.on_message(filters.command("tasks"))
         async def list_tasks_command(client, message: Message):
             """List all tasks command handler"""
             try:
-                all_tasks = task_manager.get_all_tasks()
-                
-                if not all_tasks:
-                    await message.reply_text(
-                        "📋 **No Tasks Found**\n\n"
-                        "You haven't created any forwarding tasks yet.\n"
-                        "Use `/add <source> <target>` to create your first task!"
-                    )
+                if not tasks:
+                    keyboard = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("➕ Add New Task", callback_data="add_task")]
+                    ])
+                    await message.reply_text("📭 **No tasks found.**\n\nUse `/add` to create your first forwarding task!", reply_markup=keyboard)
                     return
                 
-                tasks_text = "📋 **Your Forwarding Tasks:**\n\n"
+                task_list = "📋 **Your Forwarding Tasks:**\n\n"
                 
-                for task in all_tasks:
-                    status = "🟢 Active" if task.get("on", False) else "🔴 Inactive"
-                    tasks_text += (
-                        f"**Task {task['id']}:**\n"
-                        f"📥 Source: `{task['source']}`\n"
-                        f"📤 Target: `{task['target']}`\n"
-                        f"Status: {status}\n"
-                        f"Created: {task.get('created_at', 'Unknown')[:10]}\n\n"
-                    )
+                buttons = []
+                for task in tasks:
+                    status = "✅ ON" if task.get("on", False) else "❌ OFF"
+                    task_list += f"🆔 `{task['id']}` | {task['source']} ➡️ {task['target']} | {status}\n"
+                    
+                    # Add buttons for each task
+                    if task.get("on", False):
+                        buttons.append([InlineKeyboardButton(f"⏸️ Stop Task {task['id']}", callback_data=f"stop_{task['id']}")])
+                    else:
+                        buttons.append([InlineKeyboardButton(f"▶️ Start Task {task['id']}", callback_data=f"start_{task['id']}")])
                 
-                tasks_text += (
-                    "**Commands:**\n"
-                    "• `/on <id>` - Enable task\n"
-                    "• `/off <id>` - Disable task\n"
-                    "• `/delete <id>` - Delete task"
-                )
+                task_list += f"\n📊 **Summary:** {len(tasks)} total tasks"
+                active_count = len([t for t in tasks if t.get("on", False)])
+                task_list += f" | {active_count} active"
                 
-                await message.reply_text(tasks_text)
+                # Add control buttons
+                buttons.append([InlineKeyboardButton("➕ Add New Task", callback_data="add_task")])
+                buttons.append([InlineKeyboardButton("🗑️ Delete Task", callback_data="delete_task")])
+                
+                keyboard = InlineKeyboardMarkup(buttons)
+                await message.reply_text(task_list, reply_markup=keyboard)
                 
             except Exception as e:
-                logger.error(f"Error in list_tasks_command: {e}")
-                await message.reply_text("❌ Error listing tasks. Please try again.")
+                await message.reply_text(f"❌ Error listing tasks: {str(e)}")
         
         @control_bot.on_message(filters.command("on"))
         async def enable_task_command(client, message: Message):
             """Enable task command handler"""
             try:
+                # Get task ID from command
                 args = message.text.split()
-                
                 if len(args) < 2:
-                    await message.reply_text(
-                        "⚡ **Enable Task**\n\n"
-                        "Usage: `/on <task_id>`\n\n"
-                        "Example: `/on 0`"
-                    )
+                    await message.reply_text("❌ Usage: `/on <task_id>`\n\nExample: `/on 0`")
                     return
                 
                 task_id = int(args[1])
                 
                 if task_manager.toggle_task(task_id, True):
-                    await message.reply_text(f"✅ Task {task_id} enabled successfully!")
+                    task = task_manager.get_task(task_id)
+                    await message.reply_text(
+                        f"✅ **Task {task_id} enabled!**\n\n"
+                        f"📥 Source: `{task['source']}`\n"
+                        f"📤 Target: `{task['target']}`\n"
+                        f"⚡ Status: **ON**"
+                    )
                 else:
-                    await message.reply_text(f"❌ Task {task_id} not found.")
+                    await message.reply_text("❌ Invalid task ID.")
                     
-            except ValueError:
-                await message.reply_text("❌ Invalid task ID. Please provide a number.")
+            except (ValueError, IndexError):
+                await message.reply_text("❌ Please provide a valid task ID.")
             except Exception as e:
-                logger.error(f"Error in enable_task_command: {e}")
-                await message.reply_text("❌ Error enabling task. Please try again.")
+                await message.reply_text(f"❌ Error enabling task: {str(e)}")
         
         @control_bot.on_message(filters.command("off"))
         async def disable_task_command(client, message: Message):
             """Disable task command handler"""
             try:
+                # Get task ID from command
                 args = message.text.split()
-                
                 if len(args) < 2:
-                    await message.reply_text(
-                        "⚡ **Disable Task**\n\n"
-                        "Usage: `/off <task_id>`\n\n"
-                        "Example: `/off 0`"
-                    )
+                    await message.reply_text("❌ Usage: `/off <task_id>`\n\nExample: `/off 0`")
                     return
                 
                 task_id = int(args[1])
                 
                 if task_manager.toggle_task(task_id, False):
-                    await message.reply_text(f"✅ Task {task_id} disabled successfully!")
+                    task = task_manager.get_task(task_id)
+                    await message.reply_text(
+                        f"❌ **Task {task_id} disabled!**\n\n"
+                        f"📥 Source: `{task['source']}`\n"
+                        f"📤 Target: `{task['target']}`\n"
+                        f"⚡ Status: **OFF**"
+                    )
                 else:
-                    await message.reply_text(f"❌ Task {task_id} not found.")
+                    await message.reply_text("❌ Invalid task ID.")
                     
-            except ValueError:
-                await message.reply_text("❌ Invalid task ID. Please provide a number.")
+            except (ValueError, IndexError):
+                await message.reply_text("❌ Please provide a valid task ID.")
             except Exception as e:
-                logger.error(f"Error in disable_task_command: {e}")
-                await message.reply_text("❌ Error disabling task. Please try again.")
+                await message.reply_text(f"❌ Error disabling task: {str(e)}")
         
         @control_bot.on_message(filters.command("status"))
         async def status_command(client, message: Message):
             """Status command handler"""
             try:
-                userbot_status = "🟢 Online" if userbot_client and userbot_client.is_connected() else "🔴 Offline"
-                control_bot_status = "🟢 Online" if control_bot and control_bot.is_connected else "🔴 Offline"
+                userbot_status = "🟢 Connected" if userbot_client and userbot_client.is_connected() else "🔴 Disconnected"
+                control_bot_status = "🟢 Connected" if control_bot else "🔴 Disconnected"
                 
                 active_tasks = len([task for task in tasks if task.get("on", False)])
                 total_tasks = len(tasks)
                 
-                status_text = (
-                    "📊 **System Status**\n\n"
-                    f"🤖 UserBot: {userbot_status}\n"
-                    f"🎛️ Control Bot: {control_bot_status}\n"
-                    f"📋 Active Tasks: {active_tasks}/{total_tasks}\n"
-                    f"📅 Last Update: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-                    "**Quick Actions:**\n"
-                    "• `/tasks` - View all tasks\n"
-                    "• `/add` - Create new task"
-                )
+                status_text = f"""
+📊 **System Status**
+
+🤖 **UserBot:** {userbot_status}
+🎛️ **Control Bot:** {control_bot_status}
+
+📋 **Tasks:** {active_tasks}/{total_tasks} active
+⏰ **Uptime:** Running 24/7
+
+💡 **Tip:** Use `/tasks` to manage your forwarding tasks.
+                """
                 
                 await message.reply_text(status_text)
                 
             except Exception as e:
-                logger.error(f"Error in status_command: {e}")
-                await message.reply_text("❌ Error getting status. Please try again.")
+                await message.reply_text(f"❌ Error getting status: {str(e)}")
         
-        @control_bot.on_message(filters.command("help"))
+        @control_bot.on_message(filters.command("login"))
         async def login_help_command(client, message: Message):
             """Login help command handler"""
             help_text = """
-🔧 **Setup Help**
+🔐 **Session String Generation Guide**
 
-**Getting Your Credentials:**
+To generate a session string:
 
-1️⃣ **API Credentials**
-   • Go to https://my.telegram.org/apps
-   • Create new application
-   • Get API_ID and API_HASH
+1️⃣ **Use the helper script:**
+   Run `python session_generator.py`
 
-2️⃣ **Bot Token**
-   • Message @BotFather
-   • Create bot with /newbot
-   • Get BOT_TOKEN
+2️⃣ **Manual method:**
+   • Install: `pip install telethon`
+   • Create a script with your API_ID and API_HASH
+   • Use `client.session.save()` to get the string
 
-3️⃣ **Session String**
-   • Run session_generator.py
-   • Enter credentials and phone
-   • Get SESSION_STRING
+3️⃣ **Required credentials:**
+   • API_ID and API_HASH from https://my.telegram.org
+   • Your phone number for verification
 
-**Common Issues:**
-• Invalid session → Generate new session string
-• Bot not responding → Check BOT_TOKEN
-• Can't forward → Check UserBot permissions
+⚠️ **Important:** Keep your session string private and secure!
 
-Need more help? Check the documentation!
+Need help? Check the README.md file for detailed instructions.
             """
             await message.reply_text(help_text)
         
-        # Callback query handler
+        # Callback query handlers for inline buttons
         @control_bot.on_callback_query()
         async def handle_callback(client, callback_query):
             """Handle inline button callbacks"""
-            try:
-                data = callback_query.data
-                
-                if data == "add_task":
-                    await callback_query.message.reply_text(
-                        "📝 **Add New Task**\n\n"
-                        "Send: `/add <source> <target>`\n\n"
-                        "Example: `/add @mychannel @mygroup`"
-                    )
-                    
-                elif data == "view_tasks":
-                    all_tasks = task_manager.get_all_tasks()
-                    
-                    if not all_tasks:
-                        await callback_query.message.reply_text(
-                            "📋 **No Tasks Found**\n\n"
-                            "Create your first task with `/add`"
-                        )
-                    else:
-                        tasks_text = "📋 **Your Tasks:**\n\n"
-                        for task in all_tasks:
-                            status = "🟢" if task.get("on", False) else "🔴"
-                            tasks_text += f"{status} Task {task['id']}: {task['source']} → {task['target']}\n"
+            data = callback_query.data
+            
+            if data == "add_task":
+                await callback_query.message.reply_text(
+                    "📝 **Add Forwarding Task**\n\n"
+                    "Usage: `/add <source> <target>`\n\n"
+                    "Examples:\n"
+                    "• `/add @sourcechannel @targetgroup`\n"
+                    "• `/add -1001234567890 @mytarget`\n"
+                    "• `/add @mychannel -1001234567890`\n\n"
+                    "💡 **Tip:** You can use both @usernames and numeric IDs"
+                )
+            elif data == "view_tasks":
+                # Show tasks
+                if not tasks:
+                    keyboard = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("➕ Add New Task", callback_data="add_task")]
+                    ])
+                    await callback_query.message.reply_text("📭 **No tasks found.**\n\nUse `/add` to create your first forwarding task!", reply_markup=keyboard)
+                else:
+                    task_list = "📋 **Your Forwarding Tasks:**\n\n"
+                    buttons = []
+                    for task in tasks:
+                        status = "✅ ON" if task.get("on", False) else "❌ OFF"
+                        task_list += f"🆔 `{task['id']}` | {task['source']} ➡️ {task['target']} | {status}\n"
                         
-                        await callback_query.message.reply_text(tasks_text)
-                        
-                elif data == "status":
-                    userbot_status = "🟢" if userbot_client and userbot_client.is_connected() else "🔴"
-                    control_bot_status = "🟢" if control_bot and control_bot.is_connected else "🔴"
+                        # Add buttons for each task
+                        if task.get("on", False):
+                            buttons.append([InlineKeyboardButton(f"⏸️ Stop Task {task['id']}", callback_data=f"stop_{task['id']}")])
+                        else:
+                            buttons.append([InlineKeyboardButton(f"▶️ Start Task {task['id']}", callback_data=f"start_{task['id']}")])
                     
-                    status_text = (
-                        f"📊 **Status**\n\n"
-                        f"UserBot: {userbot_status}\n"
-                        f"Control Bot: {control_bot_status}\n"
-                        f"Tasks: {len([t for t in tasks if t.get('on')])}/{len(tasks)} active"
-                    )
+                    task_list += f"\n📊 **Summary:** {len(tasks)} total tasks"
+                    active_count = len([t for t in tasks if t.get("on", False)])
+                    task_list += f" | {active_count} active"
                     
-                    await callback_query.message.reply_text(status_text)
+                    # Add control buttons
+                    buttons.append([InlineKeyboardButton("➕ Add New Task", callback_data="add_task")])
+                    buttons.append([InlineKeyboardButton("🗑️ Delete Task", callback_data="delete_task")])
+                    
+                    keyboard = InlineKeyboardMarkup(buttons)
+                    await callback_query.message.reply_text(task_list, reply_markup=keyboard)
+            elif data == "status":
+                # Show status
+                userbot_status = "🟢 Connected" if userbot_client and userbot_client.is_connected() else "🔴 Disconnected"
+                control_bot_status = "🟢 Connected" if control_bot else "🔴 Disconnected"
                 
-                await callback_query.answer()
+                active_tasks = len([task for task in tasks if task.get("on", False)])
+                total_tasks = len(tasks)
                 
-            except Exception as e:
-                logger.error(f"Error in callback handler: {e}")
-                await callback_query.answer("❌ Error processing request")
+                status_text = f"""
+📊 **System Status**
+
+🤖 **UserBot:** {userbot_status}
+🎛️ **Control Bot:** {control_bot_status}
+
+📋 **Tasks:** {active_tasks}/{total_tasks} active
+⏰ **Uptime:** Running 24/7
+
+💡 **Tip:** Use `/tasks` to manage your forwarding tasks.
+                """
+                
+                await callback_query.message.reply_text(status_text)
+            elif data.startswith("start_"):
+                # Start task
+                task_id = int(data.split("_")[1])
+                if task_manager.toggle_task(task_id, True):
+                    await callback_query.message.reply_text(f"✅ **Task {task_id} started!**")
+                else:
+                    await callback_query.message.reply_text("❌ Invalid task ID.")
+            elif data.startswith("stop_"):
+                # Stop task
+                task_id = int(data.split("_")[1])
+                if task_manager.toggle_task(task_id, False):
+                    await callback_query.message.reply_text(f"⏸️ **Task {task_id} stopped!**")
+                else:
+                    await callback_query.message.reply_text("❌ Invalid task ID.")
+            elif data == "delete_task":
+                if not tasks:
+                    await callback_query.message.reply_text("📭 No tasks to delete.")
+                else:
+                    buttons = []
+                    for task in tasks:
+                        buttons.append([InlineKeyboardButton(f"🗑️ Delete Task {task['id']}: {task['source']} → {task['target']}", callback_data=f"del_{task['id']}")])
+                    
+                    keyboard = InlineKeyboardMarkup(buttons)
+                    await callback_query.message.reply_text("🗑️ **Select task to delete:**", reply_markup=keyboard)
+            elif data.startswith("del_"):
+                # Delete task
+                task_id = int(data.split("_")[1])
+                if task_manager.delete_task(task_id):
+                    await callback_query.message.reply_text(f"🗑️ **Task {task_id} deleted successfully!**")
+                else:
+                    await callback_query.message.reply_text("❌ Invalid task ID.")
+            
+            await callback_query.answer()
         
         return True
         
@@ -576,133 +625,60 @@ Need more help? Check the documentation!
         logger.error(f"Failed to start Control Bot: {e}")
         return False
 
-# Web endpoints
-@app.get("/")
-async def root():
-    """Root endpoint"""
-    return {
-        "status": "running",
-        "service": "Telegram UserBot System", 
-        "version": "1.0.0",
-        "endpoints": {
-            "health": "/health",
-            "status": "/status"
-        }
-    }
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    userbot_status = userbot_client and userbot_client.is_connected()
-    control_bot_status = control_bot and control_bot.is_connected
-    
-    return {
-        "status": "healthy" if (userbot_status or control_bot_status) else "unhealthy",
-        "userbot": "connected" if userbot_status else "disconnected",
-        "control_bot": "connected" if control_bot_status else "disconnected",
-        "tasks": {
-            "total": len(tasks),
-            "active": len([task for task in tasks if task.get("on", False)])
-        },
-        "timestamp": datetime.now().isoformat()
-    }
-
-@app.get("/status")
-async def status():
-    """Detailed status endpoint"""
-    return {
-        "system": {
-            "userbot_connected": userbot_client and userbot_client.is_connected(),
-            "control_bot_connected": control_bot and control_bot.is_connected,
-            "tasks_loaded": len(tasks)
-        },
-        "tasks": [
-            {
-                "id": task["id"],
-                "source": task["source"],
-                "target": task["target"],
-                "active": task.get("on", False),
-                "created": task.get("created_at")
-            }
-            for task in tasks
-        ],
-        "environment": {
-            "api_id_set": bool(API_ID),
-            "api_hash_set": bool(API_HASH),
-            "bot_token_set": bool(BOT_TOKEN),
-            "session_string_set": bool(SESSION_STRING)
-        }
-    }
-
-def run_web_server():
-    """Run the web server in a separate thread"""
-    uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="info")
-
 async def main():
     """Main application entry point"""
-    import signal
+    logger.info("Starting Telegram UserBot system...")
     
-    logger.info("Starting Telegram UserBot System...")
-    
-    # Start web server in background thread
-    web_thread = threading.Thread(target=run_web_server, daemon=True)
-    web_thread.start()
-    logger.info(f"Web server started on port {PORT}")
-    
-    # Setup signal handlers
-    def signal_handler(signum, frame):
-        logger.info("Received shutdown signal, stopping...")
-        if userbot_client:
-            asyncio.create_task(userbot_client.disconnect())
-        if control_bot:
-            asyncio.create_task(control_bot.stop())
-        exit(0)
-    
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-    
-    # Check configuration
+    # Validate configuration
     if not API_ID or not API_HASH:
-        logger.error("API_ID and API_HASH are required!")
+        logger.error("API_ID and API_HASH are required. Please check your environment variables.")
         return
     
-    # Start bots
-    userbot_started = False
-    control_bot_started = False
-    
-    if SESSION_STRING:
-        userbot_started = await setup_userbot()
-    else:
-        logger.warning("SESSION_STRING not provided. UserBot will not start.")
-    
-    if BOT_TOKEN:
-        control_bot_started = await setup_control_bot()
-    else:
-        logger.warning("BOT_TOKEN not provided. Control Bot will not start.")
-    
-    if not userbot_started and not control_bot_started:
-        logger.error("Neither UserBot nor Control Bot could be started. Check your credentials.")
+    if not BOT_TOKEN:
+        logger.error("BOT_TOKEN is required. Please check your environment variables.")
         return
     
-    logger.info("System started successfully! Web server is running.")
+    # Start UserBot (skip if session string is invalid)
+    userbot_success = await setup_userbot()
+    if not userbot_success:
+        logger.error("Failed to start UserBot. Session string may be invalid.")
+        logger.info("Control Bot will work without UserBot. Generate a valid session string to enable forwarding.")
     
-    # Keep the application running
+    # Start Control Bot
+    control_success = await setup_control_bot()
+    if not control_success:
+        logger.error("Failed to start Control Bot. Check your BOT_TOKEN.")
+        return
+    
+    logger.info("🚀 All systems started successfully!")
+    logger.info("UserBot is now forwarding messages in real-time")
+    logger.info("Control Bot is ready to accept commands")
+    
     try:
+        # Keep the application running
         if userbot_client:
             await userbot_client.run_until_disconnected()
-        elif control_bot:
-            await control_bot.idle()
         else:
-            # If neither bot is running, just keep the web server alive
-            while True:
-                await asyncio.sleep(1)
+            # Keep control bot running if no userbot
+            import signal
+            def signal_handler(signum, frame):
+                logger.info("Received signal to stop")
+                raise KeyboardInterrupt
+            
+            signal.signal(signal.SIGINT, signal_handler)
+            signal.signal(signal.SIGTERM, signal_handler)
+            
+            logger.info("Control Bot is running. Press Ctrl+C to stop.")
+            await asyncio.Event().wait()
     except KeyboardInterrupt:
         logger.info("Shutting down...")
     finally:
+        # Cleanup
         if userbot_client:
             await userbot_client.disconnect()
         if control_bot:
             await control_bot.stop()
 
 if __name__ == "__main__":
+    # Run the application
     asyncio.run(main())

@@ -15,6 +15,7 @@ from pyrogram.errors import RPCError
 from fastapi import FastAPI, HTTPException
 import uvicorn
 import threading
+import requests
 
 # Configure logging
 logging.basicConfig(
@@ -33,6 +34,7 @@ API_HASH = os.getenv("API_HASH", "")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 SESSION_STRING = os.getenv("SESSION_STRING", "")
 PORT = int(os.getenv("PORT", "5000"))
+APP_URL = os.getenv("APP_URL", "http://localhost:5000")  # Set this in Render environment
 
 # Global variables
 userbot_client: Optional[TelegramClient] = None
@@ -612,10 +614,15 @@ def run_web_server():
     uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="info")
 
 async def keep_alive():
-    """Background task to keep the app alive"""
+    """Background task to keep the app alive with internal requests"""
     while True:
-        logger.info("Keeping app alive with internal ping...")
-        await asyncio.sleep(300)  # 5 minutes
+        try:
+            logger.info("Sending internal ping to keep app alive...")
+            requests.get(f"{APP_URL}/healthz")  # Ping the healthz endpoint
+            await asyncio.sleep(300)  # 5 minutes
+        except Exception as e:
+            logger.error(f"Error in keep-alive ping: {e}")
+            await asyncio.sleep(300)
 
 async def main():
     """Main application entry point"""

@@ -1,0 +1,1027 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Rovio Quiz — Mobile App</title>
+  <meta name="theme-color" content="#0f0f12" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <!--
+  README
+  - How to run: open this file in any modern browser.
+  - Primary API: Open Trivia DB (free). Fallback: The Trivia API. Last successful batch cached for offline.
+  - Core features: multiple-choice quiz, per-question timer, lifelines (50-50, Hint, Skip), scoring (difficulty+streak+time), local leaderboard, sounds/haptics, i18n (EN/HI), text-size, theme.
+  - Keyboard: 1-4 choose, Enter next, H hint, F 50-50, S skip.
+  - Notes: navigator.vibrate may not be supported on older iOS Safari; app fails gracefully.
+  - Dev switch: change ACTIVE_API in JS to swap primary source.
+  - Test ideas: throttle/disable network, reload; use cached; try lifelines; long-press tabs; switch language and text-size.
+  -->
+  <style>
+    :root {
+      --bg: #0f0f12;
+      --bg-2: #141419;
+      --bg-3: #1b1b22;
+      --text: #f7f7fb;
+      --text-dim: #d2d2dd;
+      --muted: #9fa3b3;
+      --brand: #7c5cff;
+      --brand-2: #ffb86b;
+      --accent: #4cd1c5;
+      --danger: #ff6b6b;
+      --ok: #22c55e;
+      --card: rgba(255,255,255,0.06);
+      --glass: rgba(255,255,255,0.08);
+      --border: rgba(255,255,255,0.12);
+      --shadow: 0 20px 40px rgba(0,0,0,0.35);
+      --radius-2xl: 28px;
+      --radius-xl: 22px;
+      --radius-lg: 16px;
+      --radius-md: 12px;
+      --radius-sm: 10px;
+      --radius-pill: 999px;
+      --transition-fast: 180ms cubic-bezier(.2,.8,.2,1);
+      --transition-slow: 420ms cubic-bezier(.2,.8,.2,1);
+      --text-scale: 1;
+    }
+
+    .theme-light {
+      --bg: #f7f5f2;
+      --bg-2: #fbfaf8;
+      --bg-3: #ffffff;
+      --text: #171717;
+      --text-dim: #333843;
+      --muted: #6b7280;
+      --card: rgba(0,0,0,0.04);
+      --glass: rgba(255,255,255,0.7);
+      --border: rgba(0,0,0,0.08);
+      --shadow: 0 16px 40px rgba(0,0,0,0.12);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0; font-family: 'Outfit', system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; color: var(--text);
+      font-size: calc(16px * var(--text-scale));
+      background: radial-gradient(1200px 600px at 50% -20%, #2a243a 0%, var(--bg) 60%),
+                  radial-gradient(900px 500px at 120% 120%, #2b343f 0%, var(--bg) 60%);
+      background-attachment: fixed; -webkit-tap-highlight-color: transparent;
+    }
+
+    .app-shell { width: 100%; max-width: 480px; min-height: 100vh; margin: 0 auto; position: relative; overflow: hidden;
+      background: radial-gradient(1200px 600px at 50% -10%, rgba(124,92,255,0.16) 0%, transparent 60%),
+                  radial-gradient(1000px 600px at 80% 120%, rgba(255,184,107,0.12) 0%, transparent 60%);
+    }
+
+    .appbar { position: sticky; top: 0; z-index: 20; backdrop-filter: saturate(140%) blur(16px);
+      background: linear-gradient(to bottom, rgba(0,0,0,0.35), rgba(0,0,0,0)); }
+    .appbar-inner { padding: calc(14px + env(safe-area-inset-top)) 18px 10px; display: flex; align-items: center; justify-content: space-between; }
+    .app-title { font-weight: 700; letter-spacing: 0.2px; display: flex; align-items: center; gap: 10px; }
+    .logo-dot { width: 28px; height: 28px; border-radius: 12px; background: linear-gradient(135deg, var(--brand), var(--brand-2)); box-shadow: inset 0 1px 1px rgba(255,255,255,0.35); }
+    .appbar-actions { display: flex; align-items: center; gap: 10px; }
+
+    .screen { padding: 12px 18px 120px; display: none; animation: fadeIn var(--transition-slow); }
+    .screen.active { display: block; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+    .card { background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02)); border: 1px solid var(--border); border-radius: var(--radius-2xl); box-shadow: var(--shadow); }
+    .glass { backdrop-filter: blur(12px) saturate(160%); background: var(--card); border: 1px solid var(--border); }
+    .pill { border-radius: var(--radius-pill); padding: 10px 14px; background: var(--card); border: 1px solid var(--border); }
+    .btn { -webkit-user-select: none; user-select: none; cursor: pointer; border: none; outline: none; border-radius: var(--radius-pill);
+      font-weight: 600; padding: 14px 18px; transition: transform var(--transition-fast), box-shadow var(--transition-fast), background var(--transition-fast);
+      color: #0b0b0e; background: linear-gradient(180deg, #fff, #dbdbff); box-shadow: 0 10px 24px rgba(124,92,255,0.35); }
+    .btn:active { transform: translateY(1px) scale(0.99); }
+    .btn-primary { background: linear-gradient(135deg, var(--brand), var(--brand-2)); color: white; box-shadow: 0 10px 24px rgba(124,92,255,0.45); }
+    .btn-ghost { background: transparent; color: var(--text); border: 1px solid var(--border); box-shadow: none; }
+    .btn-block { width: 100%; }
+
+    .hero { position: relative; overflow: hidden; padding: 26px; border-radius: var(--radius-2xl);
+      background: radial-gradient(120% 120% at -20% -20%, rgba(255,184,107,.25) 0%, transparent 40%),
+                  radial-gradient(120% 120% at 120% -20%, rgba(124,92,255,.25) 0%, transparent 40%),
+                  linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02)); border: 1px solid var(--border); box-shadow: var(--shadow); }
+    .hero h1 { margin: 0 0 8px; font-size: 32px; line-height: 1.1; }
+    .hero p { margin: 0; color: var(--text-dim); }
+    .big-cta { display: flex; align-items: center; gap: 12px; margin-top: 18px; }
+
+    .tabbar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 14px; width: calc(100% - 28px); max-width: 480px; z-index: 30; }
+    .tabbar-inner { background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02)); border: 1px solid var(--border); border-radius: 24px; display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; padding: 8px; box-shadow: var(--shadow); }
+    .tab-btn { appearance: none; border: none; background: transparent; color: var(--text); font-weight: 600; padding: 10px; border-radius: 16px; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; }
+    .tab-btn.active { background: rgba(255,255,255,0.1); }
+    .tabbar.hidden { transform: translateX(-50%) translateY(120%); opacity: 0; pointer-events: none; transition: transform var(--transition-slow), opacity var(--transition-slow); }
+
+    .field { display: grid; gap: 8px; }
+    .field label { font-size: 14px; color: var(--muted); }
+    .input { width: 100%; background: var(--card); border: 1px solid var(--border); padding: 14px 16px; border-radius: 16px; color: var(--text); outline: none; transition: box-shadow var(--transition-fast), border var(--transition-fast); }
+    .input:focus { box-shadow: 0 0 0 6px rgba(124,92,255,0.2); border-color: rgba(124,92,255,0.5); }
+
+    .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .list { display: grid; gap: 14px; }
+
+    .chip { padding: 10px 14px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-pill); color: var(--text); cursor: pointer; font-weight: 600; transition: transform var(--transition-fast), background var(--transition-fast), border var(--transition-fast); }
+    .chip:active { transform: scale(0.98); }
+    .chip.active { background: rgba(124,92,255,0.2); border-color: rgba(124,92,255,0.5); }
+
+    .question-card { padding: 18px; border-radius: var(--radius-2xl); border: 1px solid var(--border); background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.03)); box-shadow: var(--shadow); }
+    .question-text { font-size: 20px; line-height: 1.4; margin-bottom: 16px; }
+    .options { display: grid; gap: 12px; }
+    .option { border: 1px solid var(--border); border-radius: 16px; padding: 14px 14px; font-weight: 600; background: var(--bg-3); cursor: pointer; transition: transform var(--transition-fast), background var(--transition-fast), border var(--transition-fast); }
+    .option:hover { transform: translateY(-1px); }
+    .option.selected { background: rgba(124,92,255,0.24); border-color: rgba(124,92,255,0.6); }
+    .option.correct { background: rgba(34,197,94,0.2); border-color: rgba(34,197,94,0.6); }
+    .option.wrong   { background: rgba(239,68,68,0.2); border-color: rgba(239,68,68,0.6); }
+    .options.locked .option { pointer-events: none; opacity: 0.95; }
+
+    .timer-badge { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: var(--radius-pill); border: 1px solid var(--border); background: var(--card); color: var(--text); font-weight: 700; }
+
+    .progress { height: 10px; background: rgba(255,255,255,0.1); border-radius: var(--radius-pill); overflow: hidden; border: 1px solid var(--border); }
+    .progress > span { display: block; height: 100%; background: linear-gradient(90deg, var(--brand), var(--brand-2)); width: 0%; transition: width 200ms linear; }
+
+    .sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+
+    .week-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; }
+    .day-dot { width: 38px; height: 38px; border-radius: 14px; border: 1px solid var(--border); background: var(--card); display: grid; place-items: center; font-weight: 700; color: var(--text-dim); }
+    .day-dot.active { background: rgba(124,92,255,0.28); color: white; border-color: rgba(124,92,255,0.6); }
+
+    .divider { height: 1px; background: var(--border); margin: 14px 0; }
+
+    .toast { position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%) translateY(40px); opacity: 0; pointer-events: none; transition: all var(--transition-slow); z-index: 40; }
+    .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+
+    .icon-btn { width: 36px; height: 36px; border-radius: 12px; display: grid; place-items: center; border: 1px solid var(--border); background: var(--card); cursor: pointer; }
+
+    /* Splash */
+    .splash { position: fixed; inset: 0; display: grid; place-items: center; background:
+      radial-gradient(1200px 800px at -10% -20%, rgba(124,92,255,0.4) 0%, transparent 45%),
+      radial-gradient(1000px 600px at 110% 120%, rgba(255,184,107,0.35) 0%, transparent 50%), var(--bg);
+      z-index: 50; transition: opacity var(--transition-slow), visibility var(--transition-slow); }
+    .splash.hide { opacity: 0; visibility: hidden; }
+    .spinner { width: 46px; height: 46px; border-radius: 50%; border: 3px solid rgba(255,255,255,0.2); border-top-color: #fff; animation: spin 1s linear infinite; margin-top: 18px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Range minimal style */
+    input[type=range].slider { width: 100%; height: 8px; border-radius: 8px; background: rgba(255,255,255,0.15); outline: none; appearance: none; border: 1px solid var(--border); }
+    input[type=range].slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 18px; height: 18px; border-radius: 50%; background: linear-gradient(135deg, var(--brand), var(--brand-2)); cursor: pointer; border: 1px solid rgba(0,0,0,0.2); box-shadow: var(--shadow); }
+
+    /* Ripple effect */
+    .ripple-wrap { position: relative; overflow: hidden; }
+    .ripple { position: absolute; border-radius: 50%; pointer-events: none; transform: translate(-50%, -50%) scale(0); opacity: 0.6; background: radial-gradient(circle, rgba(255,255,255,0.85) 0%, rgba(255,255,255,0.5) 40%, rgba(255,255,255,0) 70%); animation: ripple 600ms ease-out forwards; }
+    @keyframes ripple { to { transform: translate(-50%, -50%) scale(8); opacity: 0; } }
+
+    /* FX canvas */
+    .fx-layer { position: fixed; inset: 0; pointer-events: none; z-index: 25; }
+
+    /* Leaderboard */
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px; border-bottom: 1px solid var(--border); text-align: left; }
+    th { color: var(--muted); font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="app-shell" id="app">
+    <div class="splash" id="splash" aria-hidden="true">
+      <div style="display:grid;place-items:center;gap:12px; text-align:center;">
+        <div class="logo-dot" style="width:56px;height:56px;border-radius:22px; margin:0 auto;"></div>
+        <div style="font-weight:800; letter-spacing:.3px;">Rovio Quiz</div>
+        <div class="spinner"></div>
+      </div>
+    </div>
+
+    <div class="appbar">
+      <div class="appbar-inner">
+        <div class="app-title">
+          <div class="logo-dot" aria-hidden="true"></div>
+          <span>Rovio Quiz</span>
+        </div>
+        <div class="appbar-actions">
+          <button class="icon-btn" id="themeToggle" title="Toggle theme" aria-label="Toggle theme">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z" stroke="currentColor" stroke-width="1.7"/></svg>
+          </button>
+          <button class="icon-btn" id="syncBtn" title="Sync categories" aria-label="Sync categories">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M21 12a9 9 0 1 1-2.64-6.36" stroke="currentColor" stroke-width="1.7"/><path d="M21 3v6h-6" stroke="currentColor" stroke-width="1.7"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <main id="router">
+      <section class="screen active" id="screen-onboarding">
+        <div class="hero" style="margin: 12px 0 18px;">
+          <h1 id="t-hero-title">Speak the World's Language!</h1>
+          <p id="t-hero-sub">Master any topic with short quizzes, streaks and beautiful insights.</p>
+          <div class="big-cta">
+            <button class="btn btn-primary" id="getStartedBtn">Get started</button>
+            <button class="btn btn-ghost" id="skipToAppBtn">Skip</button>
+          </div>
+        </div>
+
+        <div class="list">
+          <div class="card" style="padding: 16px;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap: 14px;">
+              <div>
+                <div style="font-weight:700;font-size:18px">Daily Quiz</div>
+                <div style="color:var(--muted)">Your daily challenge is waiting!</div>
+              </div>
+              <button class="btn" id="dailyQuickStart">Start</button>
+            </div>
+          </div>
+
+          <div class="card" style="padding: 16px;">
+            <div style="display:flex; align-items:center; gap: 12px;">
+              <div class="timer-badge"><span style="width:10px;height:10px;border-radius:6px;background:var(--accent);"></span> Time trial</div>
+              <div class="timer-badge"><span style="width:10px;height:10px;border-radius:6px;background:var(--brand-2);"></span> Streaks</div>
+              <div class="timer-badge"><span style="width:10px;height:10px;border-radius:6px;background:var(--brand);"></span> Insights</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen" id="screen-auth">
+        <div class="list" style="margin-top: 10px;">
+          <div class="card" style="padding: 22px;">
+            <h2 style="margin:0 0 10px" id="t-login-title">Welcome Back to Rovio</h2>
+            <form id="loginForm" class="list" autocomplete="on">
+              <div class="field">
+                <label for="email">E-mail</label>
+                <input class="input" id="email" type="email" required placeholder="hello@you.com" />
+              </div>
+              <div class="field">
+                <label for="password">Password</label>
+                <input class="input" id="password" type="password" required placeholder="••••••••" />
+              </div>
+              <button type="submit" class="btn btn-primary btn-block" id="t-login-btn">Log in</button>
+              <button type="button" id="signupBtn" class="btn btn-ghost btn-block" id="t-signup-btn">New to Rovio? Sign up</button>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen" id="screen-home">
+        <div class="list" style="margin-top: 10px;">
+          <div class="hero">
+            <div style="display:flex; align-items: center; justify-content: space-between; gap: 12px;">
+              <div>
+                <div style="opacity:.9">Hello, <span id="userName">Nixtio</span>!</div>
+                <div style="font-size:14px;color:var(--muted)">Total time <b id="statTotalTime">00:00</b> · Progress <b id="statProgress">0%</b></div>
+              </div>
+              <button class="btn btn-primary" id="homeStartBtn">Start quiz</button>
+            </div>
+            <div class="divider"></div>
+            <div>
+              <div style="font-weight:700;margin-bottom:10px">Week progress</div>
+              <div class="week-grid" id="weekGrid"></div>
+            </div>
+          </div>
+
+          <div class="card" style="padding:16px;">
+            <div style="display:flex; align-items:center; justify-content: space-between; margin-bottom: 12px;">
+              <div style="display:flex; align-items:center; gap:10px; font-weight:700">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 3h8v8H3zM13 3h8v8h-8zM3 13h8v8H3zM13 13h8v8h-8z" stroke="currentColor" stroke-width="1.4" fill="none"/></svg>
+                <span>Categories</span>
+              </div>
+              <button id="refreshCats" class="icon-btn" title="Refresh">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M21 12a9 9 0 1 1-2.64-6.36" stroke="currentColor" stroke-width="1.7"/><path d="M21 3v6h-6" stroke="currentColor" stroke-width="1.7"/></svg>
+              </button>
+            </div>
+            <div id="categories" style="display:flex; gap: 8px; flex-wrap: wrap;"></div>
+          </div>
+
+          <div class="grid-2">
+            <div class="card" style="padding: 16px;">
+              <div style="font-weight:700;margin-bottom:10px">Quick Play</div>
+              <div class="list">
+                <button class="btn btn-block" data-diff="easy">Easy</button>
+                <button class="btn btn-block" data-diff="medium">Medium</button>
+                <button class="btn btn-block" data-diff="hard">Hard</button>
+              </div>
+            </div>
+            <div class="card" style="padding: 16px;">
+              <div style="font-weight:700;margin-bottom:10px">Customize</div>
+              <div class="list">
+                <button class="btn btn-block" id="setupBtn">Advanced setup</button>
+                <button class="btn btn-ghost btn-block" id="reviewBtn">Review results</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen" id="screen-setup">
+        <div class="list" style="margin-top:10px;">
+          <div class="card" style="padding: 18px;">
+            <h2 style="margin:0 0 8px">Choose settings</h2>
+            <div class="field">
+              <label>Category</label>
+              <div id="setupCats" style="display:flex; gap:10px; flex-wrap: wrap"></div>
+            </div>
+            <div class="divider"></div>
+            <div class="field">
+              <label>Difficulty</label>
+              <div class="grid-3">
+                <button class="chip" data-setup-diff="easy">Easy</button>
+                <button class="chip" data-setup-diff="medium">Medium</button>
+                <button class="chip" data-setup-diff="hard">Hard</button>
+              </div>
+            </div>
+            <div class="divider"></div>
+            <div class="grid-3">
+              <div class="field">
+                <label>Questions</label>
+                <input class="input" id="setupAmount" value="10" type="number" min="5" max="30" />
+              </div>
+              <div class="field">
+                <label>Time/question</label>
+                <input class="input" id="setupTime" value="20" type="number" min="8" max="90" />
+              </div>
+              <div class="field">
+                <label>Type</label>
+                <select class="input" id="setupType">
+                  <option value="multiple">Multiple</option>
+                  <option value="boolean">True/False</option>
+                </select>
+              </div>
+            </div>
+            <div class="divider"></div>
+            <button id="setupStart" class="btn btn-primary btn-block">Start quiz</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen" id="screen-quiz">
+        <div style="display:flex; align-items:center; justify-content: space-between; margin: 10px 2px 6px; gap:8px;">
+          <div class="timer-badge"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 8v5l3 2" stroke="currentColor" stroke-width="1.7"/></svg><span id="timer">00:20</span></div>
+          <div class="pill" style="font-weight:700">Score <span id="score">0</span></div>
+          <div class="pill" style="font-weight:700">Q <span id="qIndex">1</span>/<span id="qTotal">10</span></div>
+        </div>
+        <div class="question-card">
+          <div class="question-text" id="questionText">Loading...</div>
+          <div class="options" id="options"></div>
+          <div class="divider"></div>
+          <div class="progress"><span id="progressBar"></span></div>
+          <div class="divider"></div>
+          <div class="grid-3" aria-label="Lifelines" style="align-items:center;">
+            <button class="chip" id="lifeline5050">50-50</button>
+            <button class="chip" id="lifelineHint">Hint</button>
+            <button class="chip" id="lifelineSkip">Skip (-30)</button>
+          </div>
+        </div>
+        <div class="grid-2" style="margin-top: 14px;">
+          <button class="btn btn-ghost" id="prevBtn">Back</button>
+          <button class="btn btn-primary" id="nextBtn">Next</button>
+        </div>
+      </section>
+
+      <section class="screen" id="screen-results">
+        <div class="list" style="margin-top:10px;">
+          <div class="card" style="padding:18px;text-align:center;">
+            <div class="pill" style="margin:0 auto 12px; width:fit-content;" id="t-finished">Finished</div>
+            <h2 style="margin:0 0 10px">Great job, <span id="resultName">friend</span>!</h2>
+            <div style="display:flex; gap:14px; justify-content:center; flex-wrap:wrap;">
+              <div class="pill">Score: <b id="resultScorePoints">0</b></div>
+              <div class="pill">Correct: <b id="resultScore">0/0</b></div>
+              <div class="pill">Accuracy: <b id="resultAcc">0%</b></div>
+              <div class="pill">Best streak: <b id="resultStreak">0</b></div>
+              <div class="pill">Time: <b id="resultTime">00:00</b></div>
+            </div>
+            <div class="divider"></div>
+            <div id="reviewList" class="list"></div>
+            <div class="divider"></div>
+            <div class="grid-2">
+              <button class="btn btn-ghost" id="saveScoreBtn">Save score</button>
+              <button class="btn btn-primary" id="playAgain">Play again</button>
+            </div>
+            <div class="grid-2" style="margin-top:10px;">
+              <button class="btn btn-ghost" id="gotoHome">Home</button>
+              <button class="btn" id="shareBtn">Share</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="screen" id="screen-leaderboard">
+        <div class="card" style="padding:18px; margin-top:10px;">
+          <div style="display:flex; align-items:center; justify-content: space-between;">
+            <h2 style="margin:0">Leaderboard (Local)</h2>
+            <button class="icon-btn" id="clearLB" title="Clear">🗑️</button>
+          </div>
+          <table style="margin-top:12px;">
+            <thead><tr><th>#</th><th>Name</th><th>Score</th><th>Accuracy</th><th>Streak</th><th>Date</th></tr></thead>
+            <tbody id="lbBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="screen" id="screen-settings">
+        <div class="list" style="margin-top:10px;">
+          <div class="card" style="padding:18px;">
+            <h2 style="margin:0 0 8px">Settings</h2>
+            <div class="field">
+              <label>Theme</label>
+              <div class="grid-3">
+                <button class="chip" data-theme="dark">Dark</button>
+                <button class="chip" data-theme="light">Light</button>
+                <button class="chip" data-theme="auto">Auto</button>
+              </div>
+            </div>
+            <div class="divider"></div>
+            <div class="field">
+              <label>Sound effects</label>
+              <div class="grid-3">
+                <button class="chip" data-sound="on">On</button>
+                <button class="chip" data-sound="off">Off</button>
+                <input id="volumeRange" class="slider" type="range" min="0" max="1" step="0.01" />
+              </div>
+            </div>
+            <div class="divider"></div>
+            <div class="field">
+              <label>Haptic feedback</label>
+              <div class="grid-3">
+                <button class="chip" data-haptics="on">On</button>
+                <button class="chip" data-haptics="off">Off</button>
+              </div>
+            </div>
+            <div class="divider"></div>
+            <div class="field">
+              <label>Language</label>
+              <div class="grid-3">
+                <button class="chip" data-lang="en">English</button>
+                <button class="chip" data-lang="hi">हिन्दी</button>
+              </div>
+            </div>
+            <div class="divider"></div>
+            <div class="field">
+              <label>Text size</label>
+              <input id="textScale" class="slider" type="range" min="0.85" max="1.35" step="0.05" />
+            </div>
+            <div class="divider"></div>
+            <div class="field">
+              <label>Reset Data</label>
+              <button id="resetData" class="btn btn-ghost">Clear stats & logout</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <nav class="tabbar hidden" aria-label="Bottom Navigation">
+      <div class="tabbar-inner">
+        <button class="tab-btn active" data-tab="home" title="Home">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 12l9-9 9 9" stroke="currentColor" stroke-width="1.6"/><path d="M9 21V9h6v12" stroke="currentColor" stroke-width="1.6"/></svg>
+          <span class="sr">Home</span>
+        </button>
+        <button class="tab-btn" data-tab="results" title="Results">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 17.27 18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21 12 17.27Z" stroke="currentColor" stroke-width="1.4" fill="none"/></svg>
+          <span class="sr">Results</span>
+        </button>
+        <button class="tab-btn" data-tab="quiz" title="Quiz">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 6v6l4 2" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/></svg>
+          <span class="sr">Quiz</span>
+        </button>
+        <button class="tab-btn" data-tab="leaderboard" title="Leaderboard">
+          🏆<span class="sr">Leaderboard</span>
+        </button>
+        <button class="tab-btn" data-tab="settings" title="Settings">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" stroke="currentColor" stroke-width="1.6"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1.5.9l-.03.06a2 2 0 0 1-3.94 0l-.03-.06A1.7 1.7 0 0 0 8 19.4a1.7 1.7 0 0 0-1.87-.34l-.06.03a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.9-1.5l-.06-.03a2 2 0 0 1 0-3.94l.06-.03A1.7 1.7 0 0 0 4.6 8a1.7 1.7 0 0 0-.34-1.87l-.06-.06A2 2 0 1 1 7.03 3.24l.06.06A1.7 1.7 0 0 0 9 4.6c.5 0 1-.12 1.4-.34l.06-.03a2 2 0 0 1 3.94 0l.06.03c.44.22.92.34 1.4.34.68 0 1.33-.27 1.81-.75l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06c-.48.48-.75 1.13-.75 1.81 0 .5.12 1 .34 1.4l.03.06c.22.44.34.92.34 1.4 0 .68-.27 1.33-.75 1.81l-.06.06c-.48.48-.75 1.13-.75 1.81Z" stroke="currentColor" stroke-width="1.2"/></svg>
+          <span class="sr">Settings</span>
+        </button>
+      </div>
+    </nav>
+
+    <div class="toast" id="toast"><div class="pill">Saved</div></div>
+    <canvas id="fxCanvas" class="fx-layer"></canvas>
+  </div>
+
+  <script>
+    // --- Utilities ---
+    const qs = (sel, root=document) => root.querySelector(sel);
+    const qsa = (sel, root=document) => Array.from(root.querySelectorAll(sel));
+    const wait = ms => new Promise(res => setTimeout(res, ms));
+
+    function shuffle(array) { const arr = array.slice(); for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; } return arr; }
+    function decodeHtml(html) { const txt = document.createElement('textarea'); txt.innerHTML = html; return txt.value; }
+    function formatTime(totalSeconds) { const m = Math.floor(totalSeconds / 60).toString().padStart(2,'0'); const s = Math.floor(totalSeconds % 60).toString().padStart(2,'0'); return `${m}:${s}`; }
+    function toast(msg) { const el = qs('#toast'); el.firstElementChild.textContent = msg; el.classList.add('show'); setTimeout(() => el.classList.remove('show'), 1600); }
+
+    // --- i18n (minimal) ---
+    const I18N = {
+      en: { getStarted: 'Get started', skip: 'Skip', finished: 'Finished', loginTitle: 'Welcome Back to Rovio', login: 'Log in', signUp: 'New to Rovio? Sign up' },
+      hi: { getStarted: 'शुरू करें', skip: 'स्किप', finished: 'समाप्त', loginTitle: 'रोवियो में वापसी पर स्वागत है', login: 'लॉग इन', signUp: 'नए हैं? साइन अप करें' }
+    };
+
+    // --- Persistent state ---
+    const storage = { load(key, fallback) { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } }, save(key, value) { localStorage.setItem(key, JSON.stringify(value)); } };
+
+    const appState = {
+      user: storage.load('rq_user', null),
+      theme: storage.load('rq_theme', 'dark'),
+      language: storage.load('rq_lang', 'en'),
+      textScale: storage.load('rq_text_scale', 1),
+      stats: storage.load('rq_stats', { totalSeconds: 0, quizzes: 0, correct: 0, week: {} }),
+      categories: storage.load('rq_categories', []),
+      token: storage.load('rq_token', null),
+      leaderboard: storage.load('rq_lb', []),
+      lastBatch: storage.load('rq_last_batch', null),
+      quiz: null,
+    };
+
+    // --- Sound & Haptics ---
+    const audio = {
+      enabled: storage.load('rq_sound', true),
+      volume: storage.load('rq_volume', 0.6),
+      ctx: null,
+      unlock() { if (!this.ctx) { const C = window.AudioContext || window.webkitAudioContext; if (!C) return; this.ctx = new C(); } if (this.ctx?.state === 'suspended') this.ctx.resume(); },
+      _gain(target, tEnd, peak=0.22) { const ctx = this.ctx; const g = ctx.createGain(); g.gain.setValueAtTime(0, ctx.currentTime); g.gain.linearRampToValueAtTime(this.volume*peak, ctx.currentTime+0.01); g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime+tEnd); g.connect(ctx.destination); return g; },
+      beep(freq=520, duration=0.06, type='triangle', peak=0.22) { if (!this.enabled) return; this.unlock(); if(!this.ctx) return; const ctx=this.ctx; const o=ctx.createOscillator(); o.type=type; o.frequency.value=freq; const g=this._gain(o, duration, peak); o.connect(g); o.start(); o.stop(ctx.currentTime+duration); },
+      chord(freqs=[660,880,1320], d=0.14) { if(!this.enabled) return; this.unlock(); if(!this.ctx) return; const ctx=this.ctx; const g=this._gain(null, d, 0.24); freqs.forEach(f=>{ const o=ctx.createOscillator(); o.type='sine'; o.frequency.value=f; o.connect(g); o.start(); o.stop(ctx.currentTime+d); }); },
+      slide(from=360, to=220, d=0.12) { if(!this.enabled) return; this.unlock(); if(!this.ctx) return; const ctx=this.ctx; const o=ctx.createOscillator(); o.type='sawtooth'; o.frequency.setValueAtTime(from, ctx.currentTime); o.frequency.exponentialRampToValueAtTime(to, ctx.currentTime+d); const g=this._gain(o, d, 0.2); o.connect(g); o.start(); o.stop(ctx.currentTime+d); },
+      play(kind) {
+        switch(kind) {
+          case 'tap': this.beep(520,0.035,'triangle',0.2); break;
+          case 'toggle': this.beep(620,0.05,'square',0.23); break;
+          case 'nav': this.beep(420,0.04,'triangle',0.18); break;
+          case 'forward': this.chord([520,780],0.12); break;
+          case 'back': this.slide(420,300,0.09); break;
+          case 'success': this.chord([700,1040,1400],0.16); break;
+          case 'error': this.slide(380,210,0.14); break;
+          case 'tick': this.beep(820,0.03,'square',0.18); break;
+        }
+      }
+    };
+    const haptics = { enabled: storage.load('rq_haptics', true), impact(style='light'){ if(!this.enabled) return; if (!('vibrate' in navigator)) return; const map={ light:10, medium:20, heavy:35 }; navigator.vibrate(map[style]||10); } };
+
+    // Unlock audio on first interaction
+    window.addEventListener('pointerdown', () => audio.unlock(), { once: true, passive: true });
+
+    // --- Theme & Language handling ---
+    function applyTheme() {
+      const root = document.documentElement;
+      root.classList.remove('theme-light');
+      if (appState.theme === 'light' || (appState.theme === 'auto' && window.matchMedia('(prefers-color-scheme: light)').matches)) {
+        root.classList.add('theme-light');
+        document.querySelector('meta[name="theme-color"]').setAttribute('content', '#f7f5f2');
+      } else {
+        root.classList.remove('theme-light');
+        document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0f0f12');
+      }
+      qsa('[data-theme]').forEach(btn => btn.classList.toggle('active', btn.dataset.theme === appState.theme));
+    }
+    function applyLanguage(){
+      const t = I18N[appState.language] || I18N.en;
+      qs('#getStartedBtn').textContent = t.getStarted;
+      qs('#skipToAppBtn').textContent = t.skip;
+      qs('#t-login-title').textContent = t.loginTitle;
+      qs('#t-login-btn').textContent = t.login;
+      qs('#t-signup-btn').textContent = t.signUp;
+      qs('#t-finished').textContent = t.finished;
+      qsa('[data-lang]').forEach(b=>b.classList.toggle('active', b.dataset.lang===appState.language));
+    }
+    function applyTextScale(){ document.documentElement.style.setProperty('--text-scale', appState.textScale); }
+    function applyPreferencesUI() {
+      qsa('[data-sound]').forEach(b=> b.classList.toggle('active', (b.dataset.sound==='on') === !!audio.enabled));
+      qsa('[data-haptics]').forEach(b=> b.classList.toggle('active', (b.dataset.haptics==='on') === !!haptics.enabled));
+      const vr = qs('#volumeRange'); if (vr) vr.value = String(audio.volume);
+      qs('#textScale').value = String(appState.textScale);
+    }
+
+    // --- Router ---
+    function showScreen(id) {
+      qsa('.screen').forEach(s => s.classList.remove('active'));
+      qs(`#screen-${id}`).classList.add('active');
+      qsa('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === id));
+      const hideTabs = id === 'onboarding' || id === 'auth';
+      qs('.tabbar').classList.toggle('hidden', hideTabs);
+      if (id === 'settings') applyPreferencesUI();
+      if (id === 'leaderboard') renderLeaderboard();
+      audio.play('nav');
+    }
+
+    // --- APIs ---
+    const ACTIVE_API = 'opentdb';
+    const API = {
+      async token() {
+        if (appState.token) return appState.token;
+        const res = await fetch('https://opentdb.com/api_token.php?command=request').then(r=>r.json()).catch(()=>null);
+        if (res && res.response_code === 0) { appState.token = res.token; storage.save('rq_token', appState.token); }
+        return appState.token;
+      },
+      async categories() {
+        const cached = appState.categories; if (cached && cached.length) return cached;
+        const data = await fetch('https://opentdb.com/api_category.php').then(r=>r.json()).catch(()=>null);
+        const cats = data?.trivia_categories ?? [];
+        appState.categories = cats; storage.save('rq_categories', cats);
+        return cats;
+      },
+      async opentdb({ amount=10, category=null, difficulty='easy', type='multiple' }){
+        const token = await API.token();
+        const params = new URLSearchParams({ amount, difficulty, type, encode:'url3986' });
+        if (category) params.set('category', category); if (token) params.set('token', token);
+        const url = `https://opentdb.com/api.php?${params.toString()}`;
+        const res = await fetch(url).then(r=>r.json()).catch(()=>null);
+        if (!res || !Array.isArray(res.results) || res.response_code===1) throw new Error('OpenTDB no results');
+        return res.results.map(r=>({
+          type: r.type,
+          question: decodeURIComponent(r.question),
+          correct_answer: decodeURIComponent(r.correct_answer),
+          incorrect_answers: r.incorrect_answers.map(a=>decodeURIComponent(a)),
+          difficulty: r.difficulty,
+          category: r.category
+        }));
+      },
+      async triviaapi({ amount=10, difficulty='easy', type='multiple' }){
+        const params = new URLSearchParams(); params.set('limit', amount); params.set('types', type); if(difficulty) params.set('difficulties', difficulty);
+        const url = 'https://the-trivia-api.com/v2/questions?'+params.toString();
+        const data = await fetch(url).then(r=>r.json()).catch(()=>null);
+        if(!Array.isArray(data) || !data.length) throw new Error('TriviaAPI no results');
+        return data.map(q=>({
+          type: q.type || type,
+          question: q.question?.text || 'Question',
+          correct_answer: q.correctAnswer,
+          incorrect_answers: q.incorrectAnswers || [],
+          difficulty: q.difficulty || difficulty,
+          category: q.category || 'General'
+        }));
+      }
+    };
+
+    async function fetchQuestionsNormalized(opts){
+      const order = (opts.source||ACTIVE_API)==='opentdb' ? ['opentdb','triviaapi'] : ['triviaapi','opentdb'];
+      for(const src of order){
+        try{ const rows = await API[src](opts); const normalized = rows.map((q,idx)=>{
+          const answers = q.type==='boolean' ? ['True','False'] : shuffle([q.correct_answer, ...q.incorrect_answers]);
+          return { index: idx, question: decodeHtml(q.question), correct: decodeHtml(q.correct_answer), answers: answers.map(a=>decodeHtml(a)), selected: null, type: q.type, difficulty: (q.difficulty||'').toLowerCase(), category: q.category };
+        });
+        storage.save('rq_last_batch', normalized); appState.lastBatch = normalized; return { source: src, questions: normalized };
+        }catch(err){ /* try next */ }
+      }
+      // offline / cache fallback
+      if(appState.lastBatch){ toast('Using cached questions'); return { source:'cache', questions: appState.lastBatch }; }
+      // final fallback sample
+      const fallback = fallbackQuestions(opts.amount, opts.type).map((q,idx)=>{
+        const answers = q.type==='boolean' ? ['True','False'] : shuffle([q.correct_answer, ...q.incorrect_answers]);
+        return { index: idx, question: decodeHtml(q.question), correct: decodeHtml(q.correct_answer), answers: answers.map(a=>decodeHtml(a)), selected: null, type: q.type, difficulty: 'easy', category: 'General' };
+      });
+      return { source:'sample', questions: fallback };
+    }
+
+    function fallbackQuestions(amount=10, type='multiple') {
+      const sample = [
+        { question: 'What does a bee use to fly?', correct_answer: 'Wings', incorrect_answers: ['Sea', 'Jump', 'Hat'], type: 'multiple' },
+        { question: 'The capital of France is?', correct_answer: 'Paris', incorrect_answers: ['Rome', 'Berlin', 'Madrid'], type: 'multiple' },
+        { question: 'Is the sky blue?', correct_answer: 'True', incorrect_answers: ['False'], type: 'boolean' },
+        { question: '2 + 2 = 4', correct_answer: 'True', incorrect_answers: ['False'], type: 'boolean' },
+        { question: 'Largest planet?', correct_answer: 'Jupiter', incorrect_answers: ['Mars', 'Saturn', 'Venus'], type: 'multiple' }
+      ];
+      const arr = []; while (arr.length < amount) arr.push(sample[arr.length % sample.length]); return arr.map(q => ({ ...q, type }));
+    }
+
+    // --- Rendering helpers ---
+    function renderWeekGrid() {
+      const grid = qs('#weekGrid'); grid.innerHTML = '';
+      const today = new Date();
+      const dayIndex = (d) => (d + 6) % 7; // Monday=0
+      const start = new Date(today); start.setDate(today.getDate() - dayIndex(today.getDay()));
+      for (let i=0;i<7;i++) {
+        const d = new Date(start); d.setDate(start.getDate()+i);
+        const key = d.toISOString().slice(0,10);
+        const el = document.createElement('div'); el.className = 'day-dot'; el.textContent = ['M','T','W','T','F','S','S'][i];
+        if (appState.stats.week[key]) el.classList.add('active');
+        grid.appendChild(el);
+      }
+    }
+
+    function renderCategories(container, cats) {
+      container.innerHTML = '';
+      cats.slice(0, 24).forEach(c => {
+        const b = document.createElement('button');
+        b.className = 'chip'; b.textContent = c.name; b.dataset.id = c.id;
+        container.appendChild(b);
+      });
+    }
+
+    function updateHomeStats() {
+      qs('#statTotalTime').textContent = formatTime(appState.stats.totalSeconds);
+      const acc = appState.stats.quizzes ? Math.round((appState.stats.correct / (appState.stats.quizzes*10)) * 100) : 0;
+      qs('#statProgress').textContent = `${acc}%`;
+      qs('#userName').textContent = appState.user?.name ?? 'Friend';
+    }
+
+    // --- Scoring ---
+    const DIFF_MULTI = { easy: 1, medium: 1.5, hard: 2 };
+    const BASE_POINTS = 100; const MAX_STREAK_BONUS = 0.5; const SKIP_PENALTY = 30;
+
+    function computePoints(isCorrect, timeLeft, difficulty, streak, timePerQ){
+      if(!isCorrect) return 0;
+      const base = BASE_POINTS * (DIFF_MULTI[difficulty]||1);
+      const timeBonus = BASE_POINTS * 0.5 * (timeLeft / timePerQ);
+      const streakBonusMultiplier = 1 + Math.min(Math.max(streak-1,0)*0.1, MAX_STREAK_BONUS);
+      return Math.round(base * streakBonusMultiplier + timeBonus);
+    }
+
+    // --- Quiz flow ---
+    async function startQuiz({ amount=10, difficulty='easy', category=null, type='multiple', timePerQuestion=20, source }) {
+      const { questions, source:src } = await fetchQuestionsNormalized({ amount, difficulty, category, type, source });
+      appState.quiz = { meta: { amount, difficulty, category, type, timePerQuestion, startedAt: Date.now(), source: src }, questions, i: 0, elapsed: 0, timer: null, secondsLeft: timePerQuestion, score: 0, streak: 0, bestStreak: 0, lifelines: { fifty:1, hint:1, skip:1 } };
+      storage.save('rq_quiz_cache', appState.quiz);
+      showScreen('quiz');
+      renderQuestion();
+      beginTimer();
+      updateScorePills();
+    }
+
+    function beginTimer() {
+      stopTimer();
+      const time = appState.quiz.meta.timePerQuestion; let seconds = time; appState.quiz.secondsLeft = seconds;
+      qs('#timer').textContent = formatTime(seconds);
+      appState.quiz.timer = setInterval(() => {
+        seconds--; appState.quiz.elapsed++; appState.quiz.secondsLeft = seconds;
+        qs('#timer').textContent = formatTime(Math.max(seconds,0));
+        if (seconds <= 0) { handleTimeout(); }
+      }, 1000);
+    }
+    function stopTimer() { if (appState.quiz?.timer) { clearInterval(appState.quiz.timer); appState.quiz.timer = null; } }
+
+    function renderQuestion() {
+      const { questions, i } = appState.quiz; const q = questions[i];
+      qs('#qIndex').textContent = i+1; qs('#qTotal').textContent = questions.length;
+      qs('#questionText').textContent = q.question;
+      const opts = qs('#options'); opts.innerHTML = ''; opts.classList.remove('locked');
+      q.answers.forEach((ans, idx) => {
+        const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'option ripple-wrap'; btn.textContent = ans;
+        btn.onclick = () => selectAnswer(q, ans);
+        opts.appendChild(btn);
+      });
+      enhanceInteractiveElements();
+      updateProgress();
+      resetLifelineUI();
+    }
+
+    function revealAnswer(q) {
+      const opts = qsa('.option', qs('#options'));
+      opts.forEach(b => {
+        const value = b.textContent;
+        if (value === q.correct) b.classList.add('correct');
+        if (q.selected === value && value !== q.correct) b.classList.add('wrong');
+      });
+    }
+
+    let optionGuard = false;
+    function selectAnswer(q, ans) {
+      if (optionGuard) return;
+      q.selected = ans;
+      audio.play('tick'); haptics.impact('light');
+      const isCorrect = ans === q.correct;
+      revealAnswer(q);
+      qs('#options').classList.add('locked');
+      if (isCorrect) {
+        const add = computePoints(true, appState.quiz.secondsLeft, appState.quiz.meta.difficulty, appState.quiz.streak+1, appState.quiz.meta.timePerQuestion);
+        appState.quiz.score += add; appState.quiz.streak++; appState.quiz.bestStreak = Math.max(appState.quiz.bestStreak, appState.quiz.streak); audio.play('success'); haptics.impact('medium');
+      } else { appState.quiz.streak = 0; audio.play('error'); haptics.impact('heavy'); }
+      updateScorePills();
+      optionGuard = true; stopTimer();
+      setTimeout(() => { optionGuard = false; nextQuestion(); }, 700);
+      updateProgress();
+    }
+
+    function updateScorePills(){ qs('#score').textContent = String(appState.quiz.score); }
+
+    function updateProgress() {
+      const { questions, i } = appState.quiz; const answered = questions.filter(x => x.selected !== null).length;
+      qs('#progressBar').style.width = `${(Math.max(answered, i)/questions.length)*100}%`;
+      qs('#nextBtn').textContent = i === questions.length-1 ? 'Finish' : 'Next';
+    }
+
+    function prevQuestion() { const { i } = appState.quiz; if (i <= 0) return; appState.quiz.i--; renderQuestion(); beginTimer(); audio.play('tap'); }
+    function nextQuestion() { const { i, questions } = appState.quiz; if (i >= questions.length-1) { finishQuiz(); return; } appState.quiz.i++; renderQuestion(); beginTimer(); audio.play('tap'); }
+
+    function handleTimeout(){
+      stopTimer();
+      const q = appState.quiz.questions[appState.quiz.i];
+      q.selected = q.selected ?? '__timeout__';
+      revealAnswer(q);
+      qs('#options').classList.add('locked');
+      appState.quiz.streak = 0; audio.play('error');
+      setTimeout(()=> nextQuestion(), 700);
+    }
+
+    // --- Lifelines ---
+    function resetLifelineUI(){
+      qs('#lifeline5050').classList.toggle('active', appState.quiz.lifelines.fifty===0);
+      qs('#lifelineHint').classList.toggle('active', appState.quiz.lifelines.hint===0);
+      qs('#lifelineSkip').classList.toggle('active', appState.quiz.lifelines.skip===0);
+    }
+    function lifeline5050(){
+      if(appState.quiz.lifelines.fifty<=0) return; const q = appState.quiz.questions[appState.quiz.i]; const opts = qsa('.option', qs('#options'));
+      const wrongs = opts.filter(b=> b.textContent !== q.correct);
+      shuffle(wrongs).slice(0,2).forEach(b=>{ b.disabled=true; b.style.opacity=0.6; });
+      appState.quiz.lifelines.fifty--; resetLifelineUI(); audio.play('toggle'); haptics.impact('light');
+    }
+    function lifelineHint(){
+      if(appState.quiz.lifelines.hint<=0) return; const q = appState.quiz.questions[appState.quiz.i]; const opts = qsa('.option', qs('#options'));
+      const wrongs = opts.filter(b=> b.textContent !== q.correct && !b.disabled);
+      if(wrongs[0]){ wrongs[0].disabled=true; wrongs[0].style.opacity=0.6; }
+      appState.quiz.lifelines.hint--; resetLifelineUI(); audio.play('toggle');
+    }
+    function lifelineSkip(){
+      if(appState.quiz.lifelines.skip<=0) return; appState.quiz.score = Math.max(0, appState.quiz.score - SKIP_PENALTY); appState.quiz.streak=0; updateScorePills(); appState.quiz.lifelines.skip--; resetLifelineUI(); audio.play('back'); nextQuestion();
+    }
+
+    // --- Finish & Leaderboard ---
+    function finishQuiz() {
+      stopTimer();
+      const { questions, elapsed } = appState.quiz;
+      const correct = questions.filter(q => q.selected === q.correct).length;
+      const score = { correct, total: questions.length, elapsed, points: appState.quiz.score, bestStreak: appState.quiz.bestStreak };
+      appState.stats.totalSeconds += elapsed; appState.stats.quizzes += 1; appState.stats.correct += correct;
+      const dayKey = new Date().toISOString().slice(0,10); appState.stats.week[dayKey] = true; storage.save('rq_stats', appState.stats);
+      renderWeekGrid(); updateHomeStats(); audio.play('success'); haptics.impact('medium');
+
+      launchConfetti();
+
+      qs('#resultName').textContent = appState.user?.name ?? 'friend';
+      qs('#resultScore').textContent = `${score.correct}/${score.total}`;
+      const acc = Math.round((score.correct/score.total)*100); qs('#resultAcc').textContent = `${acc}%`;
+      qs('#resultTime').textContent = formatTime(score.elapsed);
+      qs('#resultScorePoints').textContent = String(score.points);
+      qs('#resultStreak').textContent = String(score.bestStreak);
+
+      const list = qs('#reviewList'); list.innerHTML = '';
+      questions.forEach((q, idx) => {
+        const row = document.createElement('div'); row.className = 'glass'; row.style.cssText = 'padding:12px;border-radius:16px;';
+        row.innerHTML = `<div style="font-weight:600;margin-bottom:6px">Q${idx+1}. ${q.question}</div>`;
+        const answers = document.createElement('div'); answers.className = 'grid-2';
+        q.answers.forEach(a => {
+          const small = document.createElement('div'); small.textContent = a; small.className = 'pill';
+          if (a === q.correct) small.style.background = 'rgba(34,197,94,0.2)';
+          if (a === q.selected && a !== q.correct) small.style.background = 'rgba(239,68,68,0.2)';
+          answers.appendChild(small);
+        });
+        row.appendChild(answers); list.appendChild(row);
+      });
+
+      showScreen('results');
+    }
+
+    function saveToLeaderboard(){
+      const name = appState.user?.name || 'Player';
+      const acc = qs('#resultAcc').textContent; const streak = Number(qs('#resultStreak').textContent) || 0; const points = Number(qs('#resultScorePoints').textContent)||0; const date = Date.now();
+      const correct = qs('#resultScore').textContent;
+      appState.leaderboard.push({ name, score: points, accuracy: acc, streak, date, correct });
+      appState.leaderboard.sort((a,b)=> b.score-a.score);
+      appState.leaderboard = appState.leaderboard.slice(0,10);
+      storage.save('rq_lb', appState.leaderboard);
+      renderLeaderboard(); toast('Saved');
+    }
+
+    function renderLeaderboard(){
+      const tbody = qs('#lbBody'); const list = appState.leaderboard || []; if(!tbody) return;
+      tbody.innerHTML = list.map((r,i)=>`<tr><td>${i+1}</td><td>${r.name}</td><td>${r.score}</td><td>${r.accuracy}</td><td>${r.streak}</td><td>${new Date(r.date).toLocaleString()}</td></tr>`).join('') || `<tr><td colspan="6">No scores yet</td></tr>`;
+    }
+
+    // --- Event wiring ---
+    function wire() {
+      // Global tap sound for common interactive elements
+      document.addEventListener('click', (e) => {
+        const el = e.target.closest('.btn, .chip, .tab-btn, .icon-btn, .option');
+        if (el) { audio.play('tap'); haptics.impact('light'); }
+      });
+
+      // Keyboard shortcuts during quiz
+      document.addEventListener('keydown', (e)=>{
+        const quizActive = qs('#screen-quiz').classList.contains('active'); if(!quizActive) return;
+        if(['1','2','3','4'].includes(e.key)){ const idx=Number(e.key)-1; const el=qsa('.option', qs('#options'))[idx]; el&&el.click(); }
+        if(e.key==='Enter'){ qs('#nextBtn').click(); }
+        if(e.key.toLowerCase()==='h'){ lifelineHint(); }
+        if(e.key.toLowerCase()==='f'){ lifeline5050(); }
+        if(e.key.toLowerCase()==='s'){ lifelineSkip(); }
+      });
+
+      // Tabs
+      qsa('.tab-btn').forEach(btn => btn.addEventListener('click', () => {
+        const tab = btn.dataset.tab;
+        if (tab === 'quiz' && !appState.quiz) { startQuiz({}); } else { showScreen(tab); }
+      }));
+
+      // Onboarding
+      qs('#getStartedBtn').onclick = () => showScreen('auth');
+      qs('#skipToAppBtn').onclick = () => { if (appState.user) showScreen('home'); else showScreen('auth'); };
+      qs('#dailyQuickStart').onclick = () => startQuiz({ amount: 10, difficulty: 'medium' });
+
+      // Auth
+      qs('#loginForm').addEventListener('submit', e => {
+        e.preventDefault(); const name = qs('#email').value.split('@')[0];
+        appState.user = { name, email: qs('#email').value };
+        storage.save('rq_user', appState.user);
+        toast('Welcome, '+name);
+        showScreen('home');
+        updateHomeStats();
+      });
+      qs('#signupBtn').onclick = () => toast('Sign up is instant. Just log in!');
+
+      // Home
+      qs('#homeStartBtn').onclick = () => showScreen('setup');
+      qs('#setupBtn').onclick = () => showScreen('setup');
+      qs('#reviewBtn').onclick = () => showScreen('results');
+      qs('#refreshCats').onclick = async () => { appState.categories = []; storage.save('rq_categories', []); await loadCategories(); toast('Categories refreshed'); };
+      qs('#syncBtn').onclick = async () => { await loadCategories(); toast('Synced'); };
+
+      // Setup
+      qsa('[data-setup-diff]').forEach(btn => btn.addEventListener('click', () => { qsa('[data-setup-diff]').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); }));
+      qs('#setupStart').onclick = () => {
+        const categoryBtn = qs('#setupCats .chip.active'); const category = categoryBtn ? Number(categoryBtn.dataset.id) : null;
+        const diffBtn = qsa('[data-setup-diff]').find(b=>b.classList.contains('active')) || { dataset: { setupDiff: 'easy' } };
+        const difficulty = diffBtn.dataset.setupDiff; const amount = Math.max(5, Math.min(30, Number(qs('#setupAmount').value||10)));
+        const timePerQuestion = Math.max(8, Math.min(90, Number(qs('#setupTime').value||20))); const type = qs('#setupType').value;
+        startQuiz({ amount, difficulty, category, type, timePerQuestion });
+      };
+
+      // Quiz
+      qs('#prevBtn').onclick = prevQuestion; qs('#nextBtn').onclick = nextQuestion;
+      qs('#lifeline5050').onclick = lifeline5050; qs('#lifelineHint').onclick = lifelineHint; qs('#lifelineSkip').onclick = lifelineSkip;
+
+      // Results
+      qs('#playAgain').onclick = () => startQuiz({});
+      qs('#gotoHome').onclick = () => showScreen('home');
+      qs('#saveScoreBtn').onclick = saveToLeaderboard;
+      qs('#shareBtn').onclick = async()=>{
+        try{ const text = `I scored ${qs('#resultScorePoints').textContent} in Rovio Quiz!`; if(navigator.share){ await navigator.share({ title:'Rovio Quiz', text, url: location.href }); } else { await navigator.clipboard.writeText(text+' '+location.href); toast('Copied to clipboard'); } }catch{}
+      };
+
+      // Settings
+      qsa('[data-theme]').forEach(btn => btn.onclick = () => { appState.theme = btn.dataset.theme; storage.save('rq_theme', appState.theme); applyTheme(); });
+      qs('#themeToggle').onclick = () => { appState.theme = (appState.theme === 'dark' ? 'light' : 'dark'); storage.save('rq_theme', appState.theme); applyTheme(); };
+      qsa('[data-sound]').forEach(btn => btn.onclick = () => { audio.enabled = btn.dataset.sound === 'on'; storage.save('rq_sound', audio.enabled); applyPreferencesUI(); audio.play('toggle'); });
+      qsa('[data-haptics]').forEach(btn => btn.onclick = () => { haptics.enabled = btn.dataset.haptics === 'on'; storage.save('rq_haptics', haptics.enabled); applyPreferencesUI(); });
+      const vol = qs('#volumeRange'); if (vol) vol.addEventListener('input', () => { audio.volume = Number(vol.value); storage.save('rq_volume', audio.volume); });
+      qs('#textScale').addEventListener('input', ()=>{ appState.textScale = Number(qs('#textScale').value); storage.save('rq_text_scale', appState.textScale); applyTextScale(); });
+      qsa('[data-lang]').forEach(btn=> btn.onclick = ()=>{ appState.language = btn.dataset.lang; storage.save('rq_lang', appState.language); applyLanguage(); });
+      qs('#resetData').onclick = () => { localStorage.clear(); location.reload(); };
+
+      // Leaderboard
+      qs('#clearLB').onclick = () => { if(confirm('Clear leaderboard?')){ appState.leaderboard=[]; storage.save('rq_lb', appState.leaderboard); renderLeaderboard(); } };
+    }
+
+    // --- Interactions Enhancer (Ripple + a11y) ---
+    function enhanceInteractiveElements() {
+      const clickableSelector = '.btn, .chip, .tab-btn, .icon-btn, .option';
+      qsa(clickableSelector).forEach(el => {
+        if (!el.classList.contains('ripple-wrap')) el.classList.add('ripple-wrap');
+        if (!el.dataset.rippleBound) {
+          el.dataset.rippleBound = '1';
+          el.addEventListener('pointerdown', (e) => {
+            const rect = el.getBoundingClientRect();
+            const ripple = document.createElement('span'); ripple.className = 'ripple';
+            const size = Math.max(rect.width, rect.height); ripple.style.width = ripple.style.height = size+'px';
+            ripple.style.left = (e.clientX - rect.left) + 'px'; ripple.style.top = (e.clientY - rect.top) + 'px';
+            el.appendChild(ripple); setTimeout(()=>ripple.remove(), 650);
+          });
+        }
+        if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex','0');
+        if (!el.hasAttribute('role')) el.setAttribute('role','button');
+      });
+    }
+
+    // --- Confetti FX ---
+    function launchConfetti() {
+      const canvas = qs('#fxCanvas'); if (!canvas) return; const ctx = canvas.getContext('2d');
+      const DPR = window.devicePixelRatio || 1; const W = canvas.width = Math.floor(canvas.clientWidth * DPR); const H = canvas.height = Math.floor(canvas.clientHeight * DPR);
+      const colors = ['#7c5cff','#ffb86b','#22c55e','#4cd1c5','#f7f7fb'];
+      const pieces = Array.from({ length: 120 }, () => ({
+        x: Math.random()*W, y: -20 - Math.random()*H*0.2, r: 4 + Math.random()*8, s: 0.8 + Math.random()*1.6,
+        a: Math.random()*Math.PI*2, c: colors[Math.floor(Math.random()*colors.length)]
+      }));
+      let start = null; const duration = 1200;
+      function draw(t) {
+        if (!start) start = t; const p = (t - start) / duration; ctx.clearRect(0,0,W,H);
+        pieces.forEach(pc => {
+          const dy = pc.s * (t - start) * 0.2; const dx = Math.sin((pc.y+dy)/40 + pc.a) * 6;
+          ctx.fillStyle = pc.c; ctx.beginPath(); ctx.arc(pc.x + dx, pc.y + dy, pc.r, 0, Math.PI*2); ctx.fill();
+        });
+        if (p < 1) requestAnimationFrame(draw); else ctx.clearRect(0,0,W,H);
+      }
+      requestAnimationFrame(draw);
+    }
+
+    async function loadCategories() {
+      const cats = await API.categories();
+      renderCategories(qs('#categories'), cats);
+      renderCategories(qs('#setupCats'), cats);
+      qsa('#categories .chip').forEach(ch => ch.onclick = () => { qsa('#categories .chip').forEach(x=>x.classList.remove('active')); ch.classList.add('active'); startQuiz({ category: Number(ch.dataset.id) }); });
+      qsa('#setupCats .chip').forEach(ch => ch.onclick = () => { qsa('#setupCats .chip').forEach(x=>x.classList.remove('active')); ch.classList.add('active'); });
+      enhanceInteractiveElements();
+    }
+
+    function initUI(){ applyTheme(); applyLanguage(); applyTextScale(); renderWeekGrid(); updateHomeStats(); enhanceInteractiveElements(); renderLeaderboard(); }
+
+    async function init() {
+      initUI(); wire(); await loadCategories();
+      if (appState.user) { showScreen('home'); }
+      qsa('#screen-home .btn[data-diff]').forEach(btn => btn.onclick = () => startQuiz({ difficulty: btn.dataset.diff }));
+      // Hide splash
+      await wait(650); qs('#splash').classList.add('hide');
+    }
+
+    init();
+  </script>
+</body>
+</html>

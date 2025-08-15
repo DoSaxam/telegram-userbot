@@ -251,7 +251,7 @@
                 <input class="input" id="password" type="password" required placeholder="••••••••" />
               </div>
               <button type="submit" class="btn btn-primary btn-block" id="t-login-btn">Log in</button>
-              <button type="button" id="signupBtn" class="btn btn-ghost btn-block" id="t-signup-btn">New to Rovio? Sign up</button>
+              <button type="button" id="signupBtn" class="btn btn-ghost btn-block">New to Rovio? Sign up</button>
             </form>
           </div>
         </div>
@@ -568,12 +568,13 @@
     }
     function applyLanguage(){
       const t = I18N[appState.language] || I18N.en;
-      qs('#getStartedBtn').textContent = t.getStarted;
-      qs('#skipToAppBtn').textContent = t.skip;
-      qs('#t-login-title').textContent = t.loginTitle;
-      qs('#t-login-btn').textContent = t.login;
-      qs('#t-signup-btn').textContent = t.signUp;
-      qs('#t-finished').textContent = t.finished;
+      const trySet = (sel, text) => { const el = qs(sel); if (el) el.textContent = text; };
+      trySet('#getStartedBtn', t.getStarted);
+      trySet('#skipToAppBtn', t.skip);
+      trySet('#t-login-title', t.loginTitle);
+      trySet('#t-login-btn', t.login);
+      trySet('#signupBtn', t.signUp);
+      trySet('#t-finished', t.finished);
       qsa('[data-lang]').forEach(b=>b.classList.toggle('active', b.dataset.lang===appState.language));
     }
     function applyTextScale(){ document.documentElement.style.setProperty('--text-scale', appState.textScale); }
@@ -596,28 +597,46 @@
       audio.play('nav');
     }
 
+    // --- Networking helpers ---
+    async function fetchJSONWithRetry(url, { attempts=3, timeoutMs=6000 }={}){
+      for(let i=0;i<attempts;i++){
+        try{
+          const ctl = new AbortController();
+          const t = setTimeout(()=>ctl.abort(), timeoutMs);
+          const res = await fetch(url, { signal: ctl.signal, cache:'no-store' });
+          clearTimeout(t);
+          if(!res.ok) throw new Error('HTTP '+res.status);
+          return await res.json();
+        }catch(err){ if(i===attempts-1) throw err; await new Promise(r=>setTimeout(r, 500*(i+1))); }
+      }
+    }
+
     // --- APIs ---
     const ACTIVE_API = 'opentdb';
     const API = {
       async token() {
         if (appState.token) return appState.token;
-        const res = await fetch('https://opentdb.com/api_token.php?command=request').then(r=>r.json()).catch(()=>null);
-        if (res && res.response_code === 0) { appState.token = res.token; storage.save('rq_token', appState.token); }
+        try{
+          const res = await fetchJSONWithRetry('https://opentdb.com/api_token.php?command=request', { attempts: 2 });
+          if (res && res.response_code === 0) { appState.token = res.token; storage.save('rq_token', appState.token); }
+        }catch{}
         return appState.token;
       },
       async categories() {
         const cached = appState.categories; if (cached && cached.length) return cached;
-        const data = await fetch('https://opentdb.com/api_category.php').then(r=>r.json()).catch(()=>null);
-        const cats = data?.trivia_categories ?? [];
-        appState.categories = cats; storage.save('rq_categories', cats);
-        return cats;
+        try{
+          const data = await fetchJSONWithRetry('https://opentdb.com/api_category.php', { attempts: 2 });
+          const cats = data?.trivia_categories ?? [];
+          if(cats.length){ appState.categories = cats; storage.save('rq_categories', cats); return cats; }
+        }catch{}
+        return appState.categories || [];
       },
       async opentdb({ amount=10, category=null, difficulty='easy', type='multiple' }){
         const token = await API.token();
         const params = new URLSearchParams({ amount, difficulty, type, encode:'url3986' });
         if (category) params.set('category', category); if (token) params.set('token', token);
         const url = `https://opentdb.com/api.php?${params.toString()}`;
-        const res = await fetch(url).then(r=>r.json()).catch(()=>null);
+        const res = await fetchJSONWithRetry(url, { attempts: 2 }).catch(()=>null);
         if (!res || !Array.isArray(res.results) || res.response_code===1) throw new Error('OpenTDB no results');
         return res.results.map(r=>({
           type: r.type,
@@ -631,7 +650,7 @@
       async triviaapi({ amount=10, difficulty='easy', type='multiple' }){
         const params = new URLSearchParams(); params.set('limit', amount); params.set('types', type); if(difficulty) params.set('difficulties', difficulty);
         const url = 'https://the-trivia-api.com/v2/questions?'+params.toString();
-        const data = await fetch(url).then(r=>r.json()).catch(()=>null);
+        const data = await fetchJSONWithRetry(url, { attempts: 2 }).catch(()=>null);
         if(!Array.isArray(data) || !data.length) throw new Error('TriviaAPI no results');
         return data.map(q=>({
           type: q.type || type,
@@ -701,7 +720,8 @@
 
     function updateHomeStats() {
       qs('#statTotalTime').textContent = formatTime(appState.stats.totalSeconds);
-      const acc = appState.stats.quizzes ? Math.round((appState.stats.correct / (appState.stats.quizzes*10)) * 100) : 0;
+      const totalQs = appState.stats.quizzes*10 || 1;
+      const acc = appState.stats.quizzes ? Math.round((appState.stats.correct / totalQs) * 100) : 0;
       qs('#statProgress').textContent = `${acc}%`;
       qs('#userName').textContent = appState.user?.name ?? 'Friend';
     }
@@ -721,7 +741,8 @@
     // --- Quiz flow ---
     async function startQuiz({ amount=10, difficulty='easy', category=null, type='multiple', timePerQuestion=20, source }) {
       const { questions, source:src } = await fetchQuestionsNormalized({ amount, difficulty, category, type, source });
-      appState.quiz = { meta: { amount, difficulty, category, type, timePerQuestion, startedAt: Date.now(), source: src }, questions, i: 0, elapsed: 0, timer: null, secondsLeft: timePerQuestion, score: 0, streak: 0, bestStreak: 0, lifelines: { fifty:1, hint:1, skip:1 } };
+      if(!questions || !questions.length){ toast('No questions available. Try other settings.'); return; }
+      appState.quiz = { meta: { amount: questions.length, difficulty, category, type, timePerQuestion, startedAt: Date.now(), source: src }, questions, i: 0, elapsed: 0, timer: null, secondsLeft: timePerQuestion, score: 0, streak: 0, bestStreak: 0, lifelines: { fifty:1, hint:1, skip:1 } };
       storage.save('rq_quiz_cache', appState.quiz);
       showScreen('quiz');
       renderQuestion();
@@ -743,12 +764,14 @@
 
     function renderQuestion() {
       const { questions, i } = appState.quiz; const q = questions[i];
+      if(!q){ finishQuiz(); return; }
       qs('#qIndex').textContent = i+1; qs('#qTotal').textContent = questions.length;
       qs('#questionText').textContent = q.question;
       const opts = qs('#options'); opts.innerHTML = ''; opts.classList.remove('locked');
       q.answers.forEach((ans, idx) => {
         const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'option ripple-wrap'; btn.textContent = ans;
         btn.onclick = () => selectAnswer(q, ans);
+        btn.onkeydown = (e)=>{ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); selectAnswer(q, ans);} };
         opts.appendChild(btn);
       });
       enhanceInteractiveElements();
@@ -832,6 +855,7 @@
       const { questions, elapsed } = appState.quiz;
       const correct = questions.filter(q => q.selected === q.correct).length;
       const score = { correct, total: questions.length, elapsed, points: appState.quiz.score, bestStreak: appState.quiz.bestStreak };
+      if(Number.isFinite(correct)){} else { return; }
       appState.stats.totalSeconds += elapsed; appState.stats.quizzes += 1; appState.stats.correct += correct;
       const dayKey = new Date().toISOString().slice(0,10); appState.stats.week[dayKey] = true; storage.save('rq_stats', appState.stats);
       renderWeekGrid(); updateHomeStats(); audio.play('success'); haptics.impact('medium');
@@ -883,7 +907,7 @@
       // Global tap sound for common interactive elements
       document.addEventListener('click', (e) => {
         const el = e.target.closest('.btn, .chip, .tab-btn, .icon-btn, .option');
-        if (el) { audio.play('tap'); haptics.impact('light'); }
+        if (el) { if(audio.enabled) audio.play('tap'); if(haptics.enabled) haptics.impact('light'); }
       });
 
       // Keyboard shortcuts during quiz
@@ -936,7 +960,9 @@
       };
 
       // Quiz
-      qs('#prevBtn').onclick = prevQuestion; qs('#nextBtn').onclick = nextQuestion;
+      qs('#prevBtn').onclick = prevQuestion;
+      // Guard next when locked or unanswered, else go next
+      qs('#nextBtn').addEventListener('click', (e)=>{ if(!appState.quiz) return; const q=appState.quiz.questions[appState.quiz.i]; if(q && q.selected===null){ lifelineSkip(); } else { nextQuestion(); } });
       qs('#lifeline5050').onclick = lifeline5050; qs('#lifelineHint').onclick = lifelineHint; qs('#lifelineSkip').onclick = lifelineSkip;
 
       // Results
@@ -1012,11 +1038,16 @@
     }
 
     function initUI(){ applyTheme(); applyLanguage(); applyTextScale(); renderWeekGrid(); updateHomeStats(); enhanceInteractiveElements(); renderLeaderboard(); }
+    
+    // Handle resize for confetti canvas density
+    window.addEventListener('resize', ()=>{
+      const canvas = qs('#fxCanvas'); if(canvas){ canvas.width = canvas.clientWidth*(window.devicePixelRatio||1); canvas.height = canvas.clientHeight*(window.devicePixelRatio||1); }
+    });
 
     async function init() {
-      initUI(); wire(); await loadCategories();
+      try{ initUI(); wire(); await loadCategories(); }catch{}
       if (appState.user) { showScreen('home'); }
-      qsa('#screen-home .btn[data-diff]').forEach(btn => btn.onclick = () => startQuiz({ difficulty: btn.dataset.diff }));
+      qsa('#screen-home .btn[data-diff]').forEach(btn => btn.onclick = () => startQuiz({ difficulty: btn.dataset.diff, amount: 10, timePerQuestion: 20 }));
       // Hide splash
       await wait(650); qs('#splash').classList.add('hide');
     }

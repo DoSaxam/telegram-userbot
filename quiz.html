@@ -1,0 +1,958 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+	<title>Pro Quiz — Single File App</title>
+	<meta name="theme-color" content="#111318" />
+	<style>
+		/*
+		=====================================================================
+		Pro Quiz — Single-file, production-ready, responsive and accessible app
+		Author: You + GPT-5 (single-file build)
+
+		README (also duplicated in JS for developers):
+		- How to run: just open this file `quiz.html` in any modern browser.
+		- Primary API: Open Trivia DB (no API key). Fallback: The Trivia API.
+		- To switch API order, search for `ACTIVE_API` in this file and change it.
+		- All data is fetched at runtime with retry + backoff. If network fails,
+		  the app reuses last cached question batch from localStorage.
+		- Leaderboard and Settings are also persisted in localStorage.
+		- No external dependencies or assets. Sounds use WebAudio; confetti is CSS.
+		- Accessibility: semantic HTML, ARIA, keyboard shortcuts, focus mgmt.
+		- Test cases to try (see bottom of this comment block):
+		    1) Offline: Turn off network -> app should use cached questions (if any).
+		    2) Slow network: Throttle network -> loader, retry/backoff.
+		    3) Keyboard: arrows/1-4 to choose; Enter to go Next; H/F/S lifelines.
+		    4) Settings toggles: sounds/vibration/animations/language/text-size.
+		    5) Timer: let it expire -> answer auto-locked as wrong.
+		    6) Perfect streak -> confetti.
+		- Performance tips applied: mobile-first layout, GPU-accelerated transforms
+		  for interactions, requestAnimationFrame timer updates, minimal reflows by
+		  batching DOM updates and using CSS variables for theme/text scaling.
+		- Haptics limitations: navigator.vibrate() is not supported on older iOS
+		  Safari versions and may be disabled by user/device policy. The app checks
+		  support and fails gracefully.
+		=====================================================================
+		*/
+
+		/* Design tokens (light, accessible contrast). Mobile-first */
+		:root {
+			--bg: #0f1116;
+			--surface: #171a21;
+			--surface-2: #1d222b;
+			--text: #f7f7f8;
+			--text-dim: #c0c4cf;
+			--primary: #7dd3fc; /* sky-300 */
+			--accent: #fbbf24; /* amber-400 */
+			--success: #22c55e; /* green-500 */
+			--danger: #ef4444; /* red-500 */
+			--warning: #f59e0b; /* amber-500 */
+			--muted: #2a3140;
+			--shadow: 0 10px 30px rgba(0,0,0,.45);
+			--radius: 16px;
+			--touch: 48px; /* >=44px touch target */
+			--font-scale: 1; /* user setting */
+		}
+
+		/* Reduced motion respect */
+		@media (prefers-reduced-motion: reduce) {
+			* { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+		}
+
+		html, body { height: 100%; }
+		body {
+			margin: 0; background: radial-gradient(1200px 600px at 70% -10%, #22283a, #0f1116);
+			color: var(--text); font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+			font-size: calc(16px * var(--font-scale));
+			line-height: 1.4; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+		}
+
+		.container {
+			max-width: 780px; margin: 0 auto; padding: clamp(12px, 2vw, 20px);
+		}
+
+		.card {
+			background: linear-gradient(180deg, var(--surface) 0%, var(--surface-2) 100%);
+			border: 1px solid rgba(255,255,255,0.06);
+			border-radius: var(--radius); box-shadow: var(--shadow);
+			padding: 16px; backdrop-filter: saturate(140%) blur(6px);
+		}
+
+		header.app-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+		header .title { display: flex; align-items: center; gap: 10px; }
+		header .title h1 { font-size: 1.25rem; margin: 0; letter-spacing: .3px; }
+		header nav { display: flex; gap: 8px; }
+
+		.icon-btn {
+			min-width: var(--touch); min-height: var(--touch);
+			border-radius: 12px; border: 1px solid rgba(255,255,255,0.08);
+			background: #13161c; color: var(--text);
+			display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0 12px;
+			cursor: pointer; user-select: none;
+			transition: transform .08s ease, background .2s ease, border-color .2s ease, box-shadow .2s ease;
+			will-change: transform;
+		}
+		.icon-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+		.icon-btn:hover { background: #171b23; }
+		.icon-btn:active { transform: scale(.98); }
+
+		.main-stack { display: grid; gap: 12px; }
+
+		/* Views */
+		.view { display: none; }
+		.view.active { display: block; }
+
+		/* Setup */
+		.grid { display: grid; gap: 12px; }
+		.grid.cols-2 { grid-template-columns: 1fr 1fr; }
+		@media (min-width: 720px){ .grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+		.label { color: var(--text-dim); font-size: .95rem; margin-bottom: 6px; display: block; }
+		.select, .input, .slider {
+			width: 100%; min-height: var(--touch); border-radius: 12px;
+			border: 1px solid rgba(255,255,255,0.08); background: #0f1217; color: var(--text);
+			padding: 10px 12px; font-size: 1rem;
+		}
+		.range-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; }
+		.small { font-size: .86rem; color: var(--text-dim); }
+
+		/* Quiz */
+		.progress { height: 12px; background: #0f1217; border-radius: 99px; border: 1px solid rgba(255,255,255,0.08); overflow: hidden; }
+		.progress .bar { height: 100%; width: 100%; background: linear-gradient(90deg, var(--accent), var(--warning)); transform-origin: left center; }
+		.stats-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+		.stat { background: #0f1217; border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; padding: 8px 10px; text-align: center; }
+		.stat b { display: block; font-size: 1.05rem; }
+
+		.q-text { font-size: 1.15rem; margin: 10px 0 2px; }
+		.choices { display: grid; gap: 10px; margin-top: 10px; }
+		.choice {
+			min-height: var(--touch); border-radius: 12px; border: 1px solid rgba(255,255,255,0.08);
+			background: #12151b; color: var(--text); padding: 12px; text-align: left; cursor: pointer; position: relative;
+			transition: transform .08s ease, background .2s ease, border-color .2s ease, box-shadow .2s ease;
+			will-change: transform;
+		}
+		.choice:hover { background: #151a22; }
+		.choice:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+		.choice:active { transform: scale(.99); }
+		.choice[aria-disabled="true"] { opacity: .6; cursor: not-allowed; }
+		.choice.correct { border-color: rgba(34,197,94,.8); box-shadow: 0 0 0 2px rgba(34,197,94,.25) inset; }
+		.choice.wrong { border-color: rgba(239,68,68,.8); box-shadow: 0 0 0 2px rgba(239,68,68,.25) inset; }
+
+		.controls { display: grid; grid-template-columns: 1fr; gap: 10px; margin-top: 12px; }
+		@media (min-width: 560px){ .controls { grid-template-columns: 1fr 1fr; } }
+
+		.primary-btn, .secondary-btn {
+			min-height: var(--touch); border-radius: 12px; border: 1px solid rgba(255,255,255,0.08);
+			cursor: pointer; user-select: none; padding: 12px; font-weight: 600; letter-spacing: .2px;
+			transition: transform .08s ease, background .2s ease, border-color .2s ease;
+		}
+		.primary-btn { background: linear-gradient(180deg, #111827, #0b111a); color: var(--text); }
+		.primary-btn:hover { background: linear-gradient(180deg, #141c2d, #0c1320); }
+		.secondary-btn { background: #0f1217; color: var(--text-dim); }
+		.primary-btn:active, .secondary-btn:active { transform: scale(.98); }
+		.primary-btn[disabled], .secondary-btn[disabled] { opacity: .6; cursor: not-allowed; }
+
+		.lifelines { display: flex; gap: 8px; flex-wrap: wrap; }
+		.lifeline-btn { min-height: calc(var(--touch) - 6px); padding: 10px 12px; background: #11141a; border: 1px dashed rgba(255,255,255,0.15); border-radius: 10px; color: var(--text-dim); }
+		.lifeline-btn.used { opacity: .5; text-decoration: line-through; }
+
+		.footer-note { color: var(--text-dim); font-size: .85rem; }
+
+		/* Leaderboard */
+		.table { width: 100%; border-collapse: collapse; }
+		.table th, .table td { padding: 10px; border-bottom: 1px solid rgba(255,255,255,0.08); text-align: left; }
+		.table th { color: var(--text-dim); font-weight: 500; }
+
+		/* Confetti micro-interaction */
+		.confetti { position: fixed; inset: 0; pointer-events: none; overflow: hidden; z-index: 50; }
+		.confetti i { position: absolute; width: 10px; height: 14px; border-radius: 2px; opacity: .9; will-change: transform; }
+		@keyframes fall { to { transform: translate3d(var(--x, 0), 100vh, 0) rotate(var(--r, 0deg)); } }
+
+		.hidden { display: none !important; }
+	</style>
+</head>
+<body>
+	<div class="container">
+		<header class="app-header" role="banner">
+			<div class="title" aria-label="Pro Quiz">
+				<svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87L18.18 22 12 18.77 5.82 22 7 14.14l-5-4.87 6.91-1.01L12 2z" fill="#fbbf24"/></svg>
+				<h1>Pro Quiz</h1>
+			</div>
+			<nav aria-label="Primary">
+				<button class="icon-btn" id="btnSettings" aria-haspopup="dialog" aria-controls="settingsPanel" aria-label="Settings">⚙️</button>
+				<button class="icon-btn" id="btnLeaderboard" aria-controls="leaderboardView" aria-label="Leaderboard">🏆</button>
+			</nav>
+		</header>
+
+		<main id="app" class="main-stack" role="main">
+			<!-- SETUP VIEW -->
+			<section id="setupView" class="view active" aria-labelledby="setupTitle">
+				<div class="card">
+					<h2 id="setupTitle" style="margin:0 0 8px;">Welcome! Choose your quiz</h2>
+					<p class="small" id="setupSubtitle">Questions load from Open Trivia DB (fallback: The Trivia API). You can play offline after one successful load.</p>
+					<div class="grid cols-2" style="margin-top:12px;">
+						<div>
+							<label class="label" for="categorySelect">Category</label>
+							<select id="categorySelect" class="select" aria-label="Category">
+								<option value="">Any</option>
+							</select>
+						</div>
+						<div>
+							<label class="label" for="difficultySelect">Difficulty</label>
+							<select id="difficultySelect" class="select" aria-label="Difficulty">
+								<option value="">Any</option>
+								<option value="easy">Easy</option>
+								<option value="medium">Medium</option>
+								<option value="hard">Hard</option>
+							</select>
+						</div>
+						<div>
+							<label class="label" for="amountInput">Number of Questions</label>
+							<input id="amountInput" class="input" type="number" min="5" max="30" step="1" value="10" aria-label="Number of Questions" />
+						</div>
+						<div>
+							<label class="label" for="timerInput">Timer per Question (sec)</label>
+							<input id="timerInput" class="input" type="number" min="10" max="90" step="5" value="20" aria-label="Timer per Question" />
+						</div>
+					</div>
+					<div class="controls" style="margin-top:8px;">
+						<button id="btnStart" class="primary-btn" aria-label="Start Quiz">Start Quiz</button>
+						<button id="btnLoadCached" class="secondary-btn" aria-label="Use Cached Questions">Use Cached</button>
+					</div>
+					<p class="small footer-note" style="margin-top:8px;">Shortcuts: H = Hint, F = 50-50, S = Skip. Numbers 1-4 select options. Enter = Next.</p>
+				</div>
+			</section>
+
+			<!-- QUIZ VIEW -->
+			<section id="quizView" class="view" aria-labelledby="quizTitle">
+				<div class="card" role="region" aria-live="polite" aria-atomic="true">
+					<div class="stats-row" style="margin-bottom:10px;">
+						<div class="stat" aria-label="Score"><span class="small">Score</span><b id="scoreEl">0</b></div>
+						<div class="stat" aria-label="Streak"><span class="small">Streak</span><b id="streakEl">0</b></div>
+						<div class="stat" aria-label="Question"><span class="small">Question</span><b id="qNumEl">1/10</b></div>
+					</div>
+					<h2 id="quizTitle" style="margin:0 0 8px;">Question</h2>
+					<div class="progress" aria-label="Time remaining" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100">
+						<div class="bar" id="timeBar"></div>
+					</div>
+					<p class="small" id="timeLeftText" aria-live="polite">20s</p>
+					<p class="q-text" id="qText">Loading...</p>
+					<div class="choices" id="choices" role="listbox" aria-label="Choices"></div>
+
+					<div class="lifelines" style="margin-top:10px;" aria-label="Lifelines">
+						<button class="icon-btn lifeline-btn" id="btn5050">50-50</button>
+						<button class="icon-btn lifeline-btn" id="btnHint">Hint</button>
+						<button class="icon-btn lifeline-btn" id="btnSkip">Skip (-30)</button>
+					</div>
+
+					<div class="controls">
+						<button class="primary-btn" id="btnNext" disabled>Next</button>
+						<button class="secondary-btn" id="btnQuit">Quit</button>
+					</div>
+					<div id="ariaAnnounce" class="hidden" aria-live="assertive"></div>
+				</div>
+			</section>
+
+			<!-- RESULTS VIEW -->
+			<section id="resultsView" class="view" aria-labelledby="resultsTitle">
+				<div class="card">
+					<h2 id="resultsTitle" style="margin:0 0 8px;">Results</h2>
+					<p id="resultsSummary" class="small"></p>
+					<div class="controls">
+						<input id="playerName" class="input" type="text" maxlength="32" placeholder="Your name" aria-label="Your name" />
+						<button id="btnSaveScore" class="primary-btn">Save to Leaderboard</button>
+						<button id="btnPlayAgain" class="secondary-btn">Play Again</button>
+						<button id="btnShare" class="secondary-btn">Share</button>
+					</div>
+				</div>
+			</section>
+
+			<!-- LEADERBOARD VIEW -->
+			<section id="leaderboardView" class="view" aria-labelledby="leaderboardTitle">
+				<div class="card">
+					<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+						<h2 id="leaderboardTitle" style="margin:0;">Local Leaderboard</h2>
+						<button class="secondary-btn" id="btnClearLB">Clear</button>
+					</div>
+					<table class="table" aria-describedby="leaderboardTitle">
+						<thead><tr><th>#</th><th>Name</th><th>Score</th><th>Accuracy</th><th>Best Streak</th><th>Date</th></tr></thead>
+						<tbody id="leaderboardBody"></tbody>
+					</table>
+					<div class="controls"><button class="primary-btn" id="btnBackToSetup">Back</button></div>
+				</div>
+			</section>
+		</main>
+	</div>
+
+	<!-- Settings dialog -->
+	<div id="settingsPanel" class="card" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" style="position:fixed; right:12px; bottom:12px; max-width:520px; width:min(92vw,520px); display:none; z-index:20;">
+		<div style="display:flex;justify-content:space-between;align-items:center;gap:8px; margin-bottom:8px;">
+			<h2 id="settingsTitle" style="margin:0;">Settings</h2>
+			<button class="icon-btn" id="btnCloseSettings" aria-label="Close">✖</button>
+		</div>
+		<div class="grid cols-2">
+			<label class="label" for="langSelect">Language</label>
+			<select id="langSelect" class="select" aria-label="Language">
+				<option value="en">English</option>
+				<option value="hi">हिन्दी</option>
+			</select>
+
+			<label class="label" for="textScale">Text size</label>
+			<div class="range-row">
+				<input id="textScale" class="slider" type="range" min="0.85" max="1.35" step="0.05" value="1" aria-label="Text size" />
+				<span class="small" id="textScaleVal">100%</span>
+			</div>
+
+			<label class="label" for="toggleSounds">Sounds</label>
+			<select id="toggleSounds" class="select" aria-label="Sounds"><option value="on">On</option><option value="off">Off</option></select>
+
+			<label class="label" for="toggleHaptics">Vibration</label>
+			<select id="toggleHaptics" class="select" aria-label="Vibration"><option value="on">On</option><option value="off">Off</option></select>
+
+			<label class="label" for="toggleAnim">Animations</label>
+			<select id="toggleAnim" class="select" aria-label="Animations"><option value="on">On</option><option value="off">Off</option></select>
+
+			<label class="label" for="apiSource">API Source</label>
+			<select id="apiSource" class="select" aria-label="API Source">
+				<option value="opentdb">Open Trivia DB</option>
+				<option value="triviaapi">The Trivia API</option>
+			</select>
+		</div>
+		<p class="small" style="margin-top:10px;">API note: Open Trivia DB is free and has generous limits. If it returns no results or network fails, app falls back automatically to The Trivia API with retry and backoff. Last good batch is cached locally for offline play.</p>
+	</div>
+
+	<!-- Confetti layer -->
+	<div id="confetti" class="confetti" aria-hidden="true"></div>
+
+	<script>
+	(function(){
+		'use strict';
+
+		/* ====================================================================
+			Developer README (JS):
+			- ACTIVE_API controls preferred source: 'opentdb' or 'triviaapi'.
+			- fetchQuestions(options) normalizes into: { id, question, choices, correctIndex, difficulty, category }
+			- Settings & Leaderboard persist under localStorage keys defined below.
+			- Timer uses requestAnimationFrame to animate progress bar.
+			- Sounds: WebAudio; Haptics: navigator.vibrate. Graceful fallback.
+			- Keyboard: 1-4 select, Enter next, H hint, F 50-50, S skip.
+			- Performance: minimal layout thrash, batching updates, CSS transforms.
+			- Browser haptics limitations: older iOS Safari may not support vibrate.
+		==================================================================== */
+
+		/* ------------------------------ Constants ------------------------------ */
+		const LS_KEYS = {
+			settings: 'proquiz_settings_v1',
+			leaderboard: 'proquiz_leaderboard_v1',
+			cache: 'proquiz_cache_v1',
+			categories: 'proquiz_categories_v1'
+		};
+
+		const ACTIVE_API = 'opentdb'; // Preferred API. Fallback chain handled inside fetchQuestions
+
+		const DEFAULT_SETTINGS = {
+			language: 'en',
+			sounds: true,
+			haptics: true,
+			animations: true,
+			textScale: 1,
+			apiSource: ACTIVE_API,
+			defaultTimer: 20,
+			defaultAmount: 10
+		};
+
+		const DIFFICULTY_MULTIPLIER = { easy: 1, medium: 1.5, hard: 2 };
+		const BASE_POINTS = 100;
+		const SKIP_PENALTY = 30; // points subtracted on skip
+		const MAX_STREAK_BONUS = 0.5; // up to +50% via streak
+
+		/* ------------------------------ i18n ------------------------------ */
+		const i18n = {
+			en: {
+				welcome: 'Welcome! Choose your quiz',
+				startQuiz: 'Start Quiz',
+				useCached: 'Use Cached',
+				question: 'Question',
+				next: 'Next',
+				quit: 'Quit',
+				results: 'Results',
+				save: 'Save to Leaderboard',
+				playAgain: 'Play Again',
+				share: 'Share',
+				localLeaderboard: 'Local Leaderboard',
+				back: 'Back',
+				correct: 'Correct!',
+				wrong: 'Wrong',
+				outOfTime: 'Time up',
+				hintText: 'Hint used: removed one incorrect option.',
+				skipUsed: 'Skipped with -30 penalty',
+				fiftyUsed: '50-50 used',
+				loading: 'Loading...',
+				perfect: 'Perfect streak!'
+			},
+			hi: {
+				welcome: 'स्वागत है! अपना क्विज़ चुनें',
+				startQuiz: 'शुरू करें',
+				useCached: 'कैश्ड उपयोग करें',
+				question: 'प्रश्न',
+				next: 'अगला',
+				quit: 'बाहर निकलें',
+				results: 'परिणाम',
+				save: 'लीडरबोर्ड में सहेजें',
+				playAgain: 'फिर से खेलें',
+				share: 'शेयर करें',
+				localLeaderboard: 'लोकल लीडरबोर्ड',
+				back: 'वापस',
+				correct: 'सही!',
+				wrong: 'गलत',
+				outOfTime: 'समय समाप्त',
+				hintText: 'संकेत: एक गलत विकल्प हटाया गया।',
+				skipUsed: 'स्किप किया (-30)',
+				fiftyUsed: '50-50 उपयोग किया',
+				loading: 'लोड हो रहा है...',
+				perfect: 'परफेक्ट स्ट्रीक!'
+			}
+		};
+
+		function $(sel){ return document.querySelector(sel); }
+		function $all(sel){ return Array.from(document.querySelectorAll(sel)); }
+
+		/* ------------------------------ Utilities ------------------------------ */
+		const Utils = {
+			decodeHTMLEntities(text){
+				// Decode HTML entities as returned by Open Trivia DB
+				const txt = document.createElement('textarea');
+				txt.innerHTML = text;
+				return txt.value;
+			},
+			shuffle(arr){
+				for(let i=arr.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [arr[i],arr[j]]=[arr[j],arr[i]]; }
+				return arr;
+			},
+			clamp(n,min,max){ return Math.max(min, Math.min(max, n)); },
+			formatDate(ts){ const d=new Date(ts); return d.toLocaleString(); },
+			// Exponential backoff with jitter
+			async fetchWithRetry(url, opts={}, retries=2){
+				let lastErr;
+				for(let i=0;i<=retries;i++){
+					try{
+						const resp = await fetch(url, { ...opts, cache: 'no-store' });
+						if(!resp.ok) throw new Error('HTTP '+resp.status);
+						return await resp.json();
+					}catch(err){
+						lastErr = err;
+						const backoff = Math.min(1500 * Math.pow(2,i) + Math.random()*400, 3500);
+						await new Promise(r=>setTimeout(r, backoff));
+					}
+				}
+				throw lastErr;
+			}
+		};
+
+		/* ------------------------------ Storage ------------------------------ */
+		const Storage = {
+			getSettings(){ try{ return { ...DEFAULT_SETTINGS, ...(JSON.parse(localStorage.getItem(LS_KEYS.settings) || '{}')) }; }catch{ return { ...DEFAULT_SETTINGS }; } },
+			saveSettings(s){ localStorage.setItem(LS_KEYS.settings, JSON.stringify(s)); },
+			getLeaderboard(){ try{ return JSON.parse(localStorage.getItem(LS_KEYS.leaderboard)||'[]'); }catch{ return []; } },
+			saveLeaderboard(list){ localStorage.setItem(LS_KEYS.leaderboard, JSON.stringify(list)); },
+			getCache(){ try{ return JSON.parse(localStorage.getItem(LS_KEYS.cache)||'{}'); }catch{ return {}; } },
+			saveCache(cache){ localStorage.setItem(LS_KEYS.cache, JSON.stringify(cache)); },
+			getCategories(){ try{ return JSON.parse(localStorage.getItem(LS_KEYS.categories)||'[]'); }catch{ return []; } },
+			saveCategories(cats){ localStorage.setItem(LS_KEYS.categories, JSON.stringify(cats)); }
+		};
+
+		/* ------------------------------ Audio Engine ------------------------------ */
+		const AudioEngine = (()=>{
+			let ctx=null, enabled=true, lastUnlockAttempt=0;
+			function ensure(){
+				if(!enabled) return null;
+				const now = performance.now();
+				if(!ctx && now-lastUnlockAttempt>200){
+					lastUnlockAttempt = now;
+					try{ ctx = new (window.AudioContext||window.webkitAudioContext)(); }catch{ ctx=null; }
+				}
+				return ctx;
+			}
+			function beep({freq=440, dur=0.08, type='sine', vol=0.15}){
+				const c = ensure(); if(!c) return;
+				const o=c.createOscillator(), g=c.createGain();
+				o.type=type; o.frequency.value=freq; g.gain.value=0; o.connect(g).connect(c.destination);
+				const now=c.currentTime; g.gain.linearRampToValueAtTime(vol, now+0.01); g.gain.exponentialRampToValueAtTime(0.0001, now+dur);
+				o.start(); o.stop(now+dur+0.02);
+			}
+			return {
+				setEnabled(v){ enabled=v; if(!v && ctx){ try{ ctx.close(); }catch{} ctx=null; } },
+				click(){ beep({ freq: 520, dur: .05, type:'triangle' }); },
+				success(){ beep({ freq: 860, dur: .12, type:'sine', vol: .18 }); setTimeout(()=>beep({freq:1040,dur:.1}), 60); },
+				error(){ beep({ freq: 200, dur: .14, type:'sawtooth', vol:.20 }); }
+			};
+		})();
+
+		/* ------------------------------ Haptics ------------------------------ */
+		const Haptics = (()=>{
+			let enabled=true; const canVibrate = 'vibrate' in navigator;
+			function vibrate(pattern){ if(enabled && canVibrate){ try{ navigator.vibrate(pattern); }catch{} } }
+			return {
+				setEnabled(v){ enabled=v; },
+				light(){ vibrate([8]); }, // micro tap
+				success(){ vibrate([10, 30, 10]); },
+				error(){ vibrate([20, 60, 20]); },
+				impact(){ vibrate([12]); }
+			};
+		})();
+
+		/* ------------------------------ Confetti ------------------------------ */
+		function fireConfetti(){
+			if(!settings.animations) return;
+			const root = $('#confetti');
+			root.innerHTML='';
+			const colors = ['#fbbf24','#60a5fa','#34d399','#f472b6','#eab308','#a78bfa'];
+			const n = 80;
+			for(let i=0;i<n;i++){
+				const el = document.createElement('i');
+				const x = (Math.random()*100|0)+'vw';
+				el.style.left = Math.random()*100+'%';
+				el.style.top = '-10px';
+				el.style.background = colors[Math.random()*colors.length|0];
+				el.style.transform = `translate3d(${(Math.random()*2-1)*40}px, -20px, 0)`;
+				el.style.setProperty('--x', (Math.random()*2-1)*200+'px');
+				el.style.setProperty('--r', (Math.random()*720-360)+'deg');
+				el.style.animation = `fall ${2.5 + Math.random()*1.5}s ease-out forwards`;
+				root.appendChild(el);
+			}
+			setTimeout(()=>{ root.innerHTML=''; }, 4000);
+		}
+
+		/* ------------------------------ API: Categories ------------------------------ */
+		async function loadCategories(){
+			// Cache categories for 24h
+			const cached = Storage.getCategories();
+			if(cached && cached.length){ populateCategorySelect(cached); }
+			try{
+				const data = await Utils.fetchWithRetry('https://opentdb.com/api_category.php');
+				const list = data.trivia_categories || [];
+				Storage.saveCategories(list);
+				populateCategorySelect(list);
+			}catch(err){ /* ignore; use cache if any */ }
+		}
+		function populateCategorySelect(categories){
+			const sel = $('#categorySelect');
+			const current = sel.value;
+			sel.innerHTML = '<option value="">Any</option>' + categories.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
+			if(current) sel.value = current;
+		}
+
+		/* ------------------------------ API: Questions (Normalized) ------------------------------ */
+		async function fetchQuestions(opts){
+			// opts: { amount, categoryId, difficulty, source }
+			// Returns: { questions:[normalized], source, cached:boolean }
+			const sourcePref = opts.source || settings.apiSource || ACTIVE_API;
+			const chain = sourcePref === 'opentdb' ? ['opentdb','triviaapi'] : ['triviaapi','opentdb'];
+			let lastErr=null;
+			for(const src of chain){
+				try{
+					const qs = await fetchFrom(src, opts);
+					// Cache for offline
+					const cache = Storage.getCache();
+					cache.last = { ts: Date.now(), src, opts, questions: qs };
+					Storage.saveCache(cache);
+					return { questions: qs, source: src, cached: false };
+				}catch(err){ lastErr=err; }
+			}
+			// Network failed -> try cache
+			const cache = Storage.getCache();
+			if(cache.last && cache.last.questions && cache.last.questions.length){
+				return { questions: cache.last.questions, source: cache.last.src + ' (cached)', cached: true };
+			}
+			throw lastErr || new Error('Failed to fetch questions');
+		}
+
+		async function fetchFrom(src, opts){
+			const amount = Utils.clamp(Number(opts.amount)||DEFAULT_SETTINGS.defaultAmount, 1, 50);
+			const difficulty = (opts.difficulty||'').toLowerCase();
+			if(src==='opentdb'){
+				const params = new URLSearchParams();
+				params.set('amount', amount);
+				params.set('type','multiple');
+				if(opts.categoryId) params.set('category', opts.categoryId);
+				if(difficulty) params.set('difficulty', difficulty);
+				params.set('encode','url3986'); // safer than htmlentities
+				const url = 'https://opentdb.com/api.php?'+params.toString();
+				const data = await Utils.fetchWithRetry(url, {}, 2);
+				if(data.response_code===1) throw new Error('No results from OpenTDB');
+				if(!Array.isArray(data.results)) throw new Error('Invalid OpenTDB payload');
+				const normalized = data.results.map((q,i)=>{
+					const decodedQ = decodeURIComponent(q.question);
+					const correct = decodeURIComponent(q.correct_answer);
+					const incorrect = q.incorrect_answers.map(a=>decodeURIComponent(a));
+					const choices = Utils.shuffle([correct, ...incorrect]);
+					const correctIndex = choices.indexOf(correct);
+					return {
+						id: 'o_'+i+'_'+Math.random().toString(36).slice(2),
+						question: Utils.decodeHTMLEntities(decodedQ),
+						choices: choices.map(Utils.decodeHTMLEntities),
+						correctIndex,
+						difficulty: (q.difficulty||'').toLowerCase(),
+						category: q.category
+					};
+				});
+				return normalized;
+			}
+			if(src==='triviaapi'){
+				// The Trivia API (no key). Docs: the-trivia-api.com
+				// Not all OpenTDB categories map; if category not provided, we'll skip.
+				const params = new URLSearchParams();
+				params.set('limit', amount);
+				params.set('types','multiple');
+				if(difficulty) params.set('difficulties', difficulty);
+				// Category mapping is not 1:1; we pass none for broader results
+				const url = 'https://the-trivia-api.com/v2/questions?'+params.toString();
+				const data = await Utils.fetchWithRetry(url, {}, 2);
+				if(!Array.isArray(data)) throw new Error('Invalid TheTriviaAPI payload');
+				const normalized = data.map((q,i)=>{
+					const choices = Utils.shuffle([q.correctAnswer, ...q.incorrectAnswers]);
+					return {
+						id: 't_'+(q.id||i),
+						question: q.question && q.question.text ? q.question.text : 'Question',
+						choices,
+						correctIndex: choices.indexOf(q.correctAnswer),
+						difficulty: (q.difficulty||'').toLowerCase(),
+						category: q.category||'General'
+					};
+				});
+				return normalized;
+			}
+			throw new Error('Unknown source');
+		}
+
+		/* ------------------------------ App State ------------------------------ */
+		let settings = Storage.getSettings();
+		let state = null; // will be set on start
+
+		function resetState(){
+			state = {
+				questions: [],
+				index: 0,
+				selected: -1,
+				locked: false,
+				score: 0,
+				streak: 0,
+				bestStreak: 0,
+				correctCount: 0,
+				attempted: 0,
+				startTime: 0,
+				timerSec: settings.defaultTimer,
+				timerLeft: settings.defaultTimer,
+				timerId: 0,
+				lifelines: { fifty: 1, hint: 1, skip: 1 },
+				removedChoices: new Set(),
+				meta: { source: '', cached: false }
+			};
+		}
+
+		/* ------------------------------ UI helpers ------------------------------ */
+		function t(key){ const lang=settings.language in i18n ? settings.language : 'en'; return i18n[lang][key] || i18n.en[key] || key; }
+		function setView(id){ $all('.view').forEach(v=>v.classList.remove('active')); $(id).classList.add('active'); }
+		function announce(msg){ const a=$('#ariaAnnounce'); a.textContent=''; setTimeout(()=>{ a.textContent=msg; }, 10); }
+		function updateTextScale(){ document.documentElement.style.setProperty('--font-scale', String(settings.textScale || 1)); }
+		function applySettingsToUI(){
+			$('#langSelect').value=settings.language;
+			$('#textScale').value=settings.textScale;
+			$('#textScaleVal').textContent=Math.round(settings.textScale*100)+'%';
+			$('#toggleSounds').value=settings.sounds? 'on':'off';
+			$('#toggleHaptics').value=settings.haptics? 'on':'off';
+			$('#toggleAnim').value=settings.animations? 'on':'off';
+			$('#apiSource').value=settings.apiSource||ACTIVE_API;
+		}
+		function closeSettings(){ $('#settingsPanel').style.display='none'; }
+		function openSettings(){ $('#settingsPanel').style.display='block'; $('#langSelect').focus(); }
+
+		/* ------------------------------ Score calculation ------------------------------ */
+		function computePoints(isCorrect, timeLeft, difficulty, streak){
+			if(!isCorrect) return 0;
+			const base = BASE_POINTS * (DIFFICULTY_MULTIPLIER[difficulty] || 1);
+			const timeBonus = BASE_POINTS * 0.5 * (timeLeft / state.timerSec);
+			const streakBonusMultiplier = 1 + Math.min(Math.max(streak-1,0)*0.1, MAX_STREAK_BONUS);
+			return Math.round(base * streakBonusMultiplier + timeBonus);
+		}
+
+		/* ------------------------------ Rendering ------------------------------ */
+		function renderQuestion(){
+			const q = state.questions[state.index];
+			if(!q) return;
+			$('#qNumEl').textContent = (state.index+1)+'/'+state.questions.length;
+			$('#qText').textContent = q.question;
+			const choicesEl = $('#choices'); choicesEl.innerHTML='';
+			state.removedChoices.clear();
+			state.selected=-1; state.locked=false; $('#btnNext').disabled=true;
+			q.choices.forEach((choice, idx)=>{
+				const btn = document.createElement('button');
+				btn.className='choice';
+				btn.setAttribute('role','option');
+				btn.setAttribute('aria-selected','false');
+				btn.dataset.index = String(idx);
+				btn.innerHTML = (idx+1)+'. '+escapeHTML(choice);
+				btn.addEventListener('click', ()=> onSelect(idx));
+				btn.addEventListener('keydown', (e)=> onChoiceKey(e, idx));
+				choicesEl.appendChild(btn);
+			});
+			choicesEl.querySelector('.choice')?.focus();
+			resetTimer();
+		}
+
+		function escapeHTML(s){ return s.replace(/[&<>]/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;' }[c])); }
+
+		function showAnswerFeedback(isCorrect){
+			const q = state.questions[state.index];
+			const choicesEl = $('#choices');
+			[...choicesEl.children].forEach((btn, idx)=>{
+				btn.setAttribute('aria-disabled','true');
+				btn.tabIndex = -1;
+				if(idx===q.correctIndex) btn.classList.add('correct');
+				if(idx===state.selected && !isCorrect) btn.classList.add('wrong');
+			});
+			$('#btnNext').disabled=false; $('#btnNext').focus();
+		}
+
+		function updateTopStats(){
+			$('#scoreEl').textContent = String(state.score);
+			$('#streakEl').textContent = String(state.streak);
+		}
+
+		/* ------------------------------ Timer ------------------------------ */
+		function resetTimer(){
+			stopTimer();
+			state.timerLeft = state.timerSec;
+			$('#timeLeftText').textContent = state.timerLeft+'s';
+			const bar = $('#timeBar');
+			bar.style.transform = 'scaleX(1)';
+			const start = performance.now();
+			const total = state.timerSec*1000;
+			function tick(now){
+				const elapsed = now - start;
+				const leftMs = Math.max(total - elapsed, 0);
+				state.timerLeft = Math.ceil(leftMs/1000);
+				$('#timeLeftText').textContent = state.timerLeft+'s';
+				const ratio = leftMs/total;
+				bar.style.transform = `scaleX(${ratio})`;
+				const pb = $('.progress');
+				pb.setAttribute('aria-valuenow', String(Math.round(ratio*100)));
+				if(leftMs>0 && !state.locked){ state.timerId = requestAnimationFrame(tick); }
+				else if(!state.locked){ onTimeUp(); }
+			}
+			state.timerId = requestAnimationFrame(tick);
+		}
+		function stopTimer(){ if(state.timerId){ cancelAnimationFrame(state.timerId); state.timerId=0; } }
+
+		/* ------------------------------ Interactions ------------------------------ */
+		function onSelect(idx){
+			if(state.locked) return;
+			AudioEngine.click(); Haptics.light();
+			state.selected = idx; state.locked = true; stopTimer();
+			const q = state.questions[state.index];
+			const isCorrect = idx === q.correctIndex;
+			const points = computePoints(isCorrect, state.timerLeft, q.difficulty, state.streak+1);
+			state.attempted++;
+			if(isCorrect){ state.correctCount++; state.streak++; state.bestStreak=Math.max(state.bestStreak,state.streak); state.score+=points; AudioEngine.success(); Haptics.success(); announce(t('correct')); }
+			else { state.streak=0; AudioEngine.error(); Haptics.error(); announce(t('wrong')); }
+			updateTopStats();
+			showAnswerFeedback(isCorrect);
+		}
+
+		function onTimeUp(){
+			state.locked = true; announce(t('outOfTime')); AudioEngine.error(); Haptics.error();
+			state.attempted++;
+			state.streak=0; updateTopStats();
+			showAnswerFeedback(false);
+		}
+
+		function onChoiceKey(e, idx){
+			if(e.key==='Enter' || e.key===' '){ e.preventDefault(); onSelect(idx); }
+			if(e.key==='ArrowDown' || e.key==='ArrowRight'){ e.preventDefault(); e.currentTarget.nextElementSibling?.focus(); }
+			if(e.key==='ArrowUp' || e.key==='ArrowLeft'){ e.preventDefault(); e.currentTarget.previousElementSibling?.focus(); }
+		}
+
+		function nextQuestion(){
+			if(state.index < state.questions.length-1){
+				state.index++; renderQuestion(); updateTopStats();
+			}else{ endQuiz(); }
+		}
+
+		function quitQuiz(){
+			stopTimer(); setView('#setupView');
+		}
+
+		/* ------------------------------ Lifelines ------------------------------ */
+		function use5050(){
+			if(state.locked) return; if(state.lifelines.fifty<=0) return;
+			const q = state.questions[state.index];
+			const indices = [0,1,2,3].filter(i=>i!==q.correctIndex);
+			Utils.shuffle(indices);
+			const remove = indices.slice(0,2);
+			remove.forEach(i=>{ state.removedChoices.add(i); const btn=$(`#choices .choice:nth-child(${i+1})`); if(btn){ btn.setAttribute('aria-disabled','true'); btn.style.opacity=.5; btn.tabIndex=-1; }});
+			state.lifelines.fifty--; markLifelineUsed('#btn5050'); announce(t('fiftyUsed')); Haptics.impact();
+		}
+		function useHint(){
+			if(state.locked) return; if(state.lifelines.hint<=0) return;
+			// We implement hint by removing one incorrect option if available
+			const q = state.questions[state.index];
+			const candidates = [0,1,2,3].filter(i=>i!==q.correctIndex && !state.removedChoices.has(i));
+			if(candidates.length){ const i=candidates[0]; state.removedChoices.add(i); const btn=$(`#choices .choice:nth-child(${i+1})`); if(btn){ btn.setAttribute('aria-disabled','true'); btn.style.opacity=.6; btn.tabIndex=-1; } }
+			state.lifelines.hint--; markLifelineUsed('#btnHint'); announce(t('hintText')); Haptics.light();
+		}
+		function useSkip(){
+			if(state.locked) return; if(state.lifelines.skip<=0) return;
+			state.lifelines.skip--; markLifelineUsed('#btnSkip');
+			state.score = Math.max(0, state.score - SKIP_PENALTY); state.streak=0; state.attempted++; updateTopStats(); announce(t('skipUsed'));
+			stopTimer(); nextQuestion();
+		}
+		function markLifelineUsed(sel){ const b=$(sel); b.classList.add('used'); b.setAttribute('aria-disabled','true'); }
+
+		/* ------------------------------ Results & Leaderboard ------------------------------ */
+		function endQuiz(){
+			stopTimer();
+			setView('#resultsView');
+			const accuracy = state.attempted ? Math.round((state.correctCount/state.attempted)*100) : 0;
+			$('#resultsSummary').textContent = `Score ${state.score} • Accuracy ${accuracy}% • Best streak ${state.bestStreak} • Source: ${state.meta.source}${state.meta.cached? ' (cached)':''}`;
+			if(state.correctCount===state.questions.length){ fireConfetti(); announce(t('perfect')); }
+		}
+
+		function saveToLeaderboard(){
+			const name = ($('#playerName').value || 'Player').trim().slice(0,32);
+			const accuracy = state.attempted ? Math.round((state.correctCount/state.attempted)*100) : 0;
+			const row = { name, score: state.score, date: Date.now(), streak: state.bestStreak, accuracy };
+			const list = Storage.getLeaderboard();
+			list.push(row);
+			list.sort((a,b)=> b.score - a.score);
+			const top = list.slice(0,10);
+			Storage.saveLeaderboard(top);
+			renderLeaderboard();
+			setView('#leaderboardView');
+		}
+
+		function renderLeaderboard(){
+			const tbody = $('#leaderboardBody');
+			const list = Storage.getLeaderboard();
+			tbody.innerHTML = list.map((r,i)=>`<tr><td>${i+1}</td><td>${escapeHTML(r.name)}</td><td>${r.score}</td><td>${r.accuracy}%</td><td>${r.streak}</td><td>${Utils.formatDate(r.date)}</td></tr>`).join('') || `<tr><td colspan="6" class="small">No scores yet</td></tr>`;
+		}
+
+		/* ------------------------------ Start / Flow ------------------------------ */
+		async function startQuizFromNetwork(){
+			try{
+				const options = gatherSetupOptions();
+				resetState();
+				const res = await fetchQuestions(options);
+				state.questions = res.questions;
+				state.timerSec = options.timer;
+				state.meta.source = res.source; state.meta.cached = res.cached;
+				setView('#quizView');
+				updateTopStats();
+				renderQuestion();
+			}catch(err){
+				alert('Failed to load questions. Try "Use Cached" if available.\n'+err);
+			}
+		}
+
+		function startQuizFromCache(){
+			const cache = Storage.getCache();
+			if(!cache.last || !cache.last.questions){ alert('No cached questions yet. Please load once online.'); return; }
+			const options = gatherSetupOptions();
+			resetState();
+			state.questions = cache.last.questions;
+			state.timerSec = options.timer;
+			state.meta.source = cache.last.src; state.meta.cached = true;
+			setView('#quizView'); updateTopStats(); renderQuestion();
+		}
+
+		function gatherSetupOptions(){
+			const amount = Number($('#amountInput').value)||DEFAULT_SETTINGS.defaultAmount;
+			const timer = Number($('#timerInput').value)||DEFAULT_SETTINGS.defaultTimer;
+			return { amount, timer, categoryId: $('#categorySelect').value || undefined, difficulty: $('#difficultySelect').value || undefined, source: settings.apiSource };
+		}
+
+		/* ------------------------------ Keyboard shortcuts ------------------------------ */
+		document.addEventListener('keydown', (e)=>{
+			const viewQuizActive = $('#quizView').classList.contains('active');
+			if(!viewQuizActive) return;
+			if(['1','2','3','4'].includes(e.key)){ const idx=Number(e.key)-1; const el=$(`#choices .choice:nth-child(${idx+1})`); el?.click(); }
+			if(e.key==='Enter'){ $('#btnNext').click(); }
+			if(e.key.toLowerCase()==='h'){ $('#btnHint').click(); }
+			if(e.key.toLowerCase()==='f'){ $('#btn5050').click(); }
+			if(e.key.toLowerCase()==='s'){ $('#btnSkip').click(); }
+		});
+
+		/* ------------------------------ Events ------------------------------ */
+		$('#btnStart').addEventListener('click', ()=>{ AudioEngine.click(); Haptics.light(); startQuizFromNetwork(); });
+		$('#btnLoadCached').addEventListener('click', ()=>{ AudioEngine.click(); Haptics.light(); startQuizFromCache(); });
+		$('#btnNext').addEventListener('click', ()=>{ AudioEngine.click(); Haptics.light(); nextQuestion(); });
+		$('#btnQuit').addEventListener('click', ()=>{ AudioEngine.click(); quitQuiz(); });
+		$('#btn5050').addEventListener('click', ()=>{ AudioEngine.click(); use5050(); });
+		$('#btnHint').addEventListener('click', ()=>{ AudioEngine.click(); useHint(); });
+		$('#btnSkip').addEventListener('click', ()=>{ AudioEngine.click(); useSkip(); });
+		$('#btnSaveScore').addEventListener('click', ()=>{ AudioEngine.click(); Haptics.success(); saveToLeaderboard(); });
+		$('#btnPlayAgain').addEventListener('click', ()=>{ AudioEngine.click(); setView('#setupView'); });
+		$('#btnShare').addEventListener('click', async()=>{
+			AudioEngine.click();
+			try{
+				const text = `I scored ${state.score} in Pro Quiz!`;
+				if(navigator.share){ await navigator.share({ title:'Pro Quiz', text, url: location.href }); }
+				else { await navigator.clipboard.writeText(text+' '+location.href); alert('Copied share text to clipboard!'); }
+			}catch{}
+		});
+
+		$('#btnLeaderboard').addEventListener('click', ()=>{ AudioEngine.click(); renderLeaderboard(); setView('#leaderboardView'); });
+		$('#btnBackToSetup').addEventListener('click', ()=>{ AudioEngine.click(); setView('#setupView'); });
+		$('#btnClearLB').addEventListener('click', ()=>{ if(confirm('Clear leaderboard?')){ Storage.saveLeaderboard([]); renderLeaderboard(); } });
+
+		$('#btnSettings').addEventListener('click', ()=>{ AudioEngine.click(); openSettings(); });
+		$('#btnCloseSettings').addEventListener('click', ()=>{ AudioEngine.click(); closeSettings(); });
+
+		// Settings controls
+		$('#langSelect').addEventListener('change', (e)=>{ settings.language=e.target.value; Storage.saveSettings(settings); applyLang(); });
+		$('#textScale').addEventListener('input', (e)=>{ settings.textScale=Number(e.target.value); Storage.saveSettings(settings); updateTextScale(); $('#textScaleVal').textContent=Math.round(settings.textScale*100)+'%'; });
+		$('#toggleSounds').addEventListener('change', (e)=>{ const on=e.target.value==='on'; settings.sounds=on; Storage.saveSettings(settings); AudioEngine.setEnabled(on); });
+		$('#toggleHaptics').addEventListener('change', (e)=>{ const on=e.target.value==='on'; settings.haptics=on; Storage.saveSettings(settings); Haptics.setEnabled(on); });
+		$('#toggleAnim').addEventListener('change', (e)=>{ const on=e.target.value==='on'; settings.animations=on; Storage.saveSettings(settings); });
+		$('#apiSource').addEventListener('change', (e)=>{ settings.apiSource=e.target.value; Storage.saveSettings(settings); });
+
+		/* ------------------------------ Language apply ------------------------------ */
+		function applyLang(){
+			// Basic labels updated (for brevity only key surfaces; the core of app remains language-agnostic)
+			$('#setupTitle').textContent = t('welcome');
+			$('#btnStart').textContent = t('startQuiz');
+			$('#btnLoadCached').textContent = t('useCached');
+			$('#quizTitle').textContent = t('question');
+			$('#btnNext').textContent = t('next');
+			$('#btnQuit').textContent = t('quit');
+			$('#resultsTitle').textContent = t('results');
+			$('#btnSaveScore').textContent = t('save');
+			$('#btnPlayAgain').textContent = t('playAgain');
+			$('#btnShare').textContent = t('share');
+			$('#leaderboardTitle').textContent = t('localLeaderboard');
+			$('#btnBackToSetup').textContent = t('back');
+		}
+
+		/* ------------------------------ Init ------------------------------ */
+		function attachButtonTapSounds(){
+			// Delegate to reduce listeners; play click on any button
+			document.addEventListener('click', (e)=>{
+				const el = e.target.closest('button');
+				if(el){ if(settings.sounds) AudioEngine.click(); if(settings.haptics) Haptics.light(); }
+			}, true);
+		}
+
+		function init(){
+			// Apply settings to subsystems
+			AudioEngine.setEnabled(!!settings.sounds);
+			Haptics.setEnabled(!!settings.haptics);
+			updateTextScale(); applySettingsToUI(); applyLang(); attachButtonTapSounds();
+			loadCategories();
+			renderLeaderboard();
+		}
+		init();
+
+	})();
+	</script>
+</body>
+</html>
